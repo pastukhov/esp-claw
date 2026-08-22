@@ -216,7 +216,7 @@ static char *lua_table_get_payload_json_field(lua_State *L, int index, bool defa
     return payload_json;
 }
 
-static claw_event_session_policy_t lua_module_event_publisher_parse_session_policy(lua_State *L,
+static claw_session_policy_t lua_module_event_publisher_parse_session_policy(lua_State *L,
                                                                                    int index,
                                                                                    bool *has_value)
 {
@@ -226,7 +226,7 @@ static claw_event_session_policy_t lua_module_event_publisher_parse_session_poli
     lua_getfield(L, index, "session_policy");
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
-        return CLAW_EVENT_SESSION_POLICY_CHAT;
+        return CLAW_SESSION_POLICY_CHAT;
     }
     if (!lua_isstring(L, -1)) {
         lua_pop(L, 1);
@@ -237,23 +237,23 @@ static claw_event_session_policy_t lua_module_event_publisher_parse_session_poli
     policy = lua_tostring(L, -1);
     lua_pop(L, 1);
     if (strcmp(policy, "chat") == 0) {
-        return CLAW_EVENT_SESSION_POLICY_CHAT;
+        return CLAW_SESSION_POLICY_CHAT;
     }
     if (strcmp(policy, "trigger") == 0) {
-        return CLAW_EVENT_SESSION_POLICY_TRIGGER;
+        return CLAW_SESSION_POLICY_TRIGGER;
     }
     if (strcmp(policy, "global") == 0) {
-        return CLAW_EVENT_SESSION_POLICY_GLOBAL;
+        return CLAW_SESSION_POLICY_GLOBAL;
     }
     if (strcmp(policy, "ephemeral") == 0) {
-        return CLAW_EVENT_SESSION_POLICY_EPHEMERAL;
+        return CLAW_SESSION_POLICY_EPHEMERAL;
     }
     if (strcmp(policy, "nosave") == 0) {
-        return CLAW_EVENT_SESSION_POLICY_NOSAVE;
+        return CLAW_SESSION_POLICY_NOSAVE;
     }
 
     luaL_error(L, "invalid session_policy '%s'", policy);
-    return CLAW_EVENT_SESSION_POLICY_CHAT;
+    return CLAW_SESSION_POLICY_CHAT;
 }
 
 static void lua_module_event_publisher_copy_field(char *dst,
@@ -366,7 +366,6 @@ static int lua_event_publisher_publish(lua_State *L)
     correlation_id = lua_table_get_string_field(L, 1, "correlation_id", false);
     content_type = lua_table_get_string_field(L, 1, "content_type", false);
     text = lua_table_get_string_field(L, 1, "text", false);
-    payload_json = lua_table_get_payload_json_field(L, 1, false);
     has_timestamp = lua_table_get_integer_field(L, 1, "timestamp_ms", &timestamp_ms);
 
     lua_module_event_publisher_copy_field(event.source_cap, sizeof(event.source_cap), source_cap);
@@ -390,8 +389,12 @@ static int lua_event_publisher_publish(lua_State *L)
     event.timestamp_ms = has_timestamp ? timestamp_ms : (esp_timer_get_time() / 1000);
     event.session_policy = lua_module_event_publisher_parse_session_policy(L, 1, &has_policy);
     if (!has_policy && strcmp(event_type, "trigger") == 0) {
-        event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+        event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     }
+
+    /* Build the heap payload last: every option parser above can raise
+     * (luaL_error -> longjmp), which would otherwise leak payload_json. */
+    payload_json = lua_table_get_payload_json_field(L, 1, false);
 
     event.text = (char *)text;
     event.payload_json = payload_json;

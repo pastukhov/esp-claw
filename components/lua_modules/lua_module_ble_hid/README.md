@@ -9,7 +9,8 @@ keyboard, and mouse input reports.
 - Call `ble_hid.init([{ name = "esp-claw-hid" }])` before advertising or sending reports
 - Call `ble_hid.start([{ name = "esp-claw-hid" }])` to start HID advertising
 - Pair from the host operating system Bluetooth settings with the advertised name
-- Call `ble_hid.status()` to read `{ initialized, advertising, connected, bonded }`
+- Call `ble_hid.status()` to read `{ initialized, advertising, connected, encrypted, notify_enabled, bonded, ready }`
+- Call `ble_hid.describe()` to read report ids and text input limits
 - Call `ble_hid.media(key [, gesture])` to send a Consumer Control report
 - Call `ble_hid.key(key)` to press and release one keyboard key
 - Call `ble_hid.combo(key_or_modifier, ...)` to press a shortcut such as `CTRL+C`
@@ -114,49 +115,11 @@ Typical failures are:
 - `not connected`: pair and connect from the host before sending reports
 - `unsupported ...`: use one of the supported key, modifier, media, button, or gesture names
 
-## HID Reports
+## Introspection
 
-The module owns one BLE HID service with three input reports:
-- Consumer Control: report ID `1`, 1 byte
-- Keyboard: report ID `2`, 8 bytes, `modifier + reserved + 6 keycodes`
-- Mouse: report ID `3`, 5 bytes, `buttons + x + y + wheel + horizontal pan`
-
-The C implementation sends report payload bytes with:
-
-```c
-esp_hidd_dev_input_set(dev, 0, report_id, data, len);
-```
-
-The payload does not include the report ID. ESP-IDF `esp_hidd` owns the HID GATT
-service, characteristics, CCCD handling, protocol mode, control point, and BLE
-notification transport.
-
-## Runtime Scripts
-
-Agent-facing runtime scripts are installed under `/fatfs/skills/ble_hid/scripts/`:
-- `/fatfs/skills/ble_hid/scripts/start_ble_hid.lua`
-- `/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua`
-
-`start_ble_hid.lua` initializes BLE HID and starts advertising if needed.
-`send_ble_hid_action.lua` sends one explicit media, keyboard, or mouse action.
-
-The reusable action helper is `lib/ble_hid_actions.lua`. It is an internal
-library, not a direct runtime entry point.
-
-Example runtime calls:
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/start_ble_hid.lua","args":{"name":"esp-claw-hid"},"timeout_ms":10000}
-```
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"media","key":"play_pause"},"timeout_ms":5000}
-```
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_combo","keys":["CTRL","C"]},"timeout_ms":5000}
-```
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"mouse_move","dx":30,"dy":0},"timeout_ms":5000}
-```
+`ble_hid.describe()` returns:
+- `consumer_report_id`
+- `keyboard_report_id`
+- `mouse_report_id`
+- `text_scope`
+- `text_unicode`

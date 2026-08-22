@@ -1,8 +1,8 @@
 # Lua I2C
 
-This module describes how to correctly use `i2c` when writing Lua scripts.
-It is built on top of the `i2c_bus` component and supports scanning a bus
-and talking to multiple devices on the same bus.
+This module describes how to use `i2c` from Lua for I2C buses and 7-bit
+addressed devices. It supports scanning a bus and talking to multiple devices
+on the same bus.
 
 ## How to call
 - Import it with `local i2c = require("i2c")`
@@ -29,6 +29,15 @@ and talking to multiple devices on the same bus.
 `mem_addr` is the 8-bit internal register/memory address inside the device.
 Omit it (or pass `nil`) for devices that have no internal address. Any error
 raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
+
+## Reusable libraries
+- `ssd1306`: Pure-Lua SSD1306 OLED helper for I2C panels. Use
+  `local ssd1306 = require("ssd1306")` after opening an I2C device handle.
+- `lib_si12t_touch`: Pure-Lua Si12T 12-channel capacitive touch helper. Use
+  `local si12t_touch = require("lib_si12t_touch")`; it can reuse an existing
+  I2C bus or create one from `port`, `sda`, and `scl` options.
+
+Full API docs for these helpers are bundled with the libraries.
 
 ## Example: scan the bus
 ```lua

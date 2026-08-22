@@ -13,7 +13,7 @@
 #include "cap_lua.h"
 #include "esp_err.h"
 
-#define CAP_LUA_MAX_SCRIPT_SIZE         (16 * 1024)
+#define CAP_LUA_MAX_SCRIPT_SIZE         (64 * 1024)
 #define CAP_LUA_OUTPUT_SIZE             (4 * 1024)
 #define CAP_LUA_SYNC_DEFAULT_TIMEOUT_MS 60000
 #define CAP_LUA_ASYNC_DEFAULT_TIMEOUT_MS 0
@@ -25,10 +25,6 @@
 #define CAP_LUA_ASYNC_MAX_CONCURRENT    4
 #define CAP_LUA_MAX_MODULES             32
 
-#define CAP_LUA_JOB_NAME_MAX            32
-#define CAP_LUA_JOB_EXCLUSIVE_MAX       16
-#define CAP_LUA_JOB_PATH_MAX            192
-#define CAP_LUA_JOB_ID_LEN              9
 #define CAP_LUA_STOP_WAIT_DEFAULT_MS    2000
 
 typedef void (*cap_lua_runtime_log_fn_t)(void *user_ctx,
@@ -47,15 +43,6 @@ typedef struct {
     time_t created_at;
 } cap_lua_async_job_t;
 
-typedef enum {
-    CAP_LUA_JOB_QUEUED = 0,
-    CAP_LUA_JOB_RUNNING,
-    CAP_LUA_JOB_DONE,
-    CAP_LUA_JOB_FAILED,
-    CAP_LUA_JOB_TIMEOUT,
-    CAP_LUA_JOB_STOPPED,
-} cap_lua_job_status_t;
-
 typedef struct {
     char job_id[CAP_LUA_JOB_ID_LEN];
     char name[CAP_LUA_JOB_NAME_MAX];
@@ -67,14 +54,10 @@ typedef struct {
     time_t finished_at;
 } cap_lua_async_job_snapshot_t;
 
-const char *cap_lua_get_base_dir(void);
 size_t cap_lua_get_package_path_dir_count(void);
 const char *cap_lua_get_package_path_dir(size_t index);
-bool cap_lua_path_is_valid(const char *path);
 bool cap_lua_run_path_is_valid(const char *path);
-esp_err_t cap_lua_resolve_path(const char *path, char *resolved, size_t resolved_size);
 esp_err_t cap_lua_resolve_run_path(const char *path, char *resolved, size_t resolved_size);
-esp_err_t cap_lua_ensure_base_dir(void);
 
 esp_err_t cap_lua_runtime_init(void);
 
@@ -136,3 +119,5 @@ esp_err_t cap_lua_async_wait_settle(const char *job_id,
                                     cap_lua_job_status_t *out_status,
                                     char *summary_out,
                                     size_t summary_out_size);
+esp_err_t cap_lua_async_register_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx);
+esp_err_t cap_lua_async_unregister_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx);

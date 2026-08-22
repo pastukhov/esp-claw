@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "cap_im_wechat.h"
+#include "claw_utils_string.h"
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -30,9 +31,9 @@
 #include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "mbedtls/aes.h"
+#include "aes/esp_aes.h"
 #include "mbedtls/base64.h"
-#include "mbedtls/md5.h"
+#include "esp_rom_md5.h"
 
 static const char *TAG = "cap_im_wechat";
 
@@ -306,6 +307,30 @@ static int cap_im_wechat_int_value(cJSON *item, int fallback)
     return fallback;
 }
 
+static bool cap_im_wechat_json_has_success_code(cJSON *root)
+{
+    cJSON *item = NULL;
+
+    if (!cJSON_IsObject(root)) {
+        return false;
+    }
+
+    item = cJSON_GetObjectItemCaseSensitive(root, "ret");
+    if (cJSON_IsNumber(item) && item->valueint != 0) {
+        return false;
+    }
+    item = cJSON_GetObjectItemCaseSensitive(root, "errcode");
+    if (cJSON_IsNumber(item) && item->valueint != 0) {
+        return false;
+    }
+    item = cJSON_GetObjectItemCaseSensitive(root, "code");
+    if (cJSON_IsNumber(item) && item->valueint != 0) {
+        return false;
+    }
+
+    return true;
+}
+
 static int64_t cap_im_wechat_int64_value(cJSON *item, int64_t fallback)
 {
     if (cJSON_IsNumber(item)) {
@@ -571,6 +596,9 @@ static esp_err_t cap_im_wechat_http_request(const char *url,
     config.user_data = response;
     config.buffer_size = 1024;
     config.buffer_size_tx = 2048;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -751,7 +779,7 @@ static esp_err_t cap_im_wechat_publish_attachment_event(const char *chat_id,
     strlcpy(event.message_id, message_id, sizeof(event.message_id));
     strlcpy(event.content_type, content_type, sizeof(event.content_type));
     event.timestamp_ms = cap_im_wechat_now_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     snprintf(event.event_id, sizeof(event.event_id), "wechat-attach-%" PRId64, event.timestamp_ms);
     event.text = "";
     event.payload_json = (char *)payload_json;
@@ -887,7 +915,7 @@ static esp_err_t cap_im_wechat_aes_ecb_crypt(const unsigned char *input,
                                              unsigned char **out_buf,
                                              size_t *out_len)
 {
-    mbedtls_aes_context aes;
+    esp_aes_context aes;
     unsigned char *buffer = NULL;
     size_t padded_len;
     size_t i;
@@ -913,26 +941,26 @@ static esp_err_t cap_im_wechat_aes_ecb_crypt(const unsigned char *input,
         memset(buffer + input_len, pad, pad);
     }
 
-    mbedtls_aes_init(&aes);
-    ret = encrypt ? mbedtls_aes_setkey_enc(&aes, key, 128) : mbedtls_aes_setkey_dec(&aes, key, 128);
+    esp_aes_init(&aes);
+    ret = esp_aes_setkey(&aes, key, 128);
     if (ret != 0) {
-        mbedtls_aes_free(&aes);
+        esp_aes_free(&aes);
         free(buffer);
         return ESP_FAIL;
     }
 
     for (i = 0; i < padded_len; i += 16) {
-        ret = mbedtls_aes_crypt_ecb(&aes,
-                                    encrypt ? MBEDTLS_AES_ENCRYPT : MBEDTLS_AES_DECRYPT,
-                                    buffer + i,
-                                    buffer + i);
+        ret = esp_aes_crypt_ecb(&aes,
+                                encrypt ? ESP_AES_ENCRYPT : ESP_AES_DECRYPT,
+                                buffer + i,
+                                buffer + i);
         if (ret != 0) {
-            mbedtls_aes_free(&aes);
+            esp_aes_free(&aes);
             free(buffer);
             return ESP_FAIL;
         }
     }
-    mbedtls_aes_free(&aes);
+    esp_aes_free(&aes);
 
     if (!encrypt) {
         unsigned char pad = buffer[padded_len - 1];
@@ -1538,7 +1566,11 @@ static esp_err_t cap_im_wechat_poll_once(void)
 
     if (cap_im_wechat_int_value(cJSON_GetObjectItemCaseSensitive(root, "ret"), 0) != 0 ||
             cap_im_wechat_int_value(cJSON_GetObjectItemCaseSensitive(root, "errcode"), 0) != 0) {
-        ESP_LOGW(TAG, "wechat getupdates error: %s", cJSON_PrintUnformatted(root));
+        /* cJSON_PrintUnformatted returns a heap string; free it after logging
+         * (it was previously leaked on every error poll cycle). */
+        char *err_body = cJSON_PrintUnformatted(root);
+        ESP_LOGW(TAG, "wechat getupdates error: %s", err_body ? err_body : "(null)");
+        cJSON_free(err_body);
         cJSON_Delete(root);
         return ESP_FAIL;
     }
@@ -1606,6 +1638,7 @@ static void cap_im_wechat_poll_task(void *arg)
 static esp_err_t cap_im_wechat_send_message_json(cJSON *msg_root)
 {
     cJSON *root = NULL;
+    cJSON *resp_root = NULL;
     cap_im_wechat_http_resp_t response = {0};
     esp_err_t err;
 
@@ -1632,8 +1665,23 @@ static esp_err_t cap_im_wechat_send_message_json(cJSON *msg_root)
 
     err = cap_im_wechat_api_post("ilink/bot/sendmessage", root, 15000, &response);
     cJSON_Delete(root);
+    if (err != ESP_OK) {
+        cap_im_wechat_resp_cleanup(&response);
+        return err;
+    }
+
+    if (response.buf && response.buf[0]) {
+        resp_root = cJSON_Parse(response.buf);
+        if (!resp_root || !cap_im_wechat_json_has_success_code(resp_root)) {
+            ESP_LOGW(TAG, "wechat sendmessage returned error body=%s", response.buf);
+            cJSON_Delete(resp_root);
+            cap_im_wechat_resp_cleanup(&response);
+            return ESP_FAIL;
+        }
+        cJSON_Delete(resp_root);
+    }
     cap_im_wechat_resp_cleanup(&response);
-    return err;
+    return ESP_OK;
 }
 
 static void cap_im_wechat_build_client_id(char *buf, size_t buf_size)
@@ -1740,7 +1788,10 @@ static esp_err_t cap_im_wechat_md5_hex(const unsigned char *buf,
         return ESP_ERR_INVALID_ARG;
     }
 
-    mbedtls_md5(buf, len, digest);
+    md5_context_t md5_ctx;
+    esp_rom_md5_init(&md5_ctx);
+    esp_rom_md5_update(&md5_ctx, buf, len);
+    esp_rom_md5_final(digest, &md5_ctx);
     for (i = 0; i < sizeof(digest); i++) {
         snprintf(out + (i * 2), out_size - (i * 2), "%02x", digest[i]);
     }
@@ -2446,7 +2497,10 @@ esp_err_t cap_im_wechat_send_text(const char *chat_id, const char *text)
         esp_err_t err;
 
         if (chunk_len > CAP_IM_WECHAT_MAX_MSG_LEN) {
-            chunk_len = CAP_IM_WECHAT_MAX_MSG_LEN;
+            chunk_len = claw_utils_utf8_prefix_len(text + offset, CAP_IM_WECHAT_MAX_MSG_LEN);
+            if (chunk_len == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
         }
 
         chunk = calloc(1, chunk_len + 1);

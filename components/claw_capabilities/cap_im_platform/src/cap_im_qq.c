@@ -5,6 +5,7 @@
  */
 #include "cap_im_qq.h"
 #include "cap_im_attachment.h"
+#include "claw_utils_string.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -20,6 +21,7 @@
 #include "claw_task.h"
 #include "claw_event_publisher.h"
 #include "esp_crt_bundle.h"
+#include "esp_attr.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -109,12 +111,20 @@ typedef struct {
     size_t seen_msg_idx;
 } cap_im_qq_state_t;
 
-static cap_im_qq_state_t s_qq = {
-    .max_inbound_file_bytes = 2 * 1024 * 1024,
-    .heartbeat_interval_ms = 30000,
-    .last_seq = -1,
-    .msg_type = 0,
-};
+static EXT_RAM_BSS_ATTR cap_im_qq_state_t s_qq;
+static bool s_qq_initialized;
+
+static void cap_im_qq_init_defaults(void)
+{
+    if (s_qq_initialized) {
+        return;
+    }
+    s_qq.max_inbound_file_bytes = 2 * 1024 * 1024;
+    s_qq.heartbeat_interval_ms = 30000;
+    s_qq.last_seq = -1;
+    s_qq.msg_type = 0;
+    s_qq_initialized = true;
+}
 
 static int64_t cap_im_qq_now_ms(void)
 {
@@ -458,16 +468,19 @@ static esp_err_t cap_im_qq_get_access_token(void)
         cJSON *expires_json;
         int expires_in;
 
-        free(resp.buf);
         if (!root) {
+            free(resp.buf);
             return ESP_FAIL;
         }
 
         token_json = cJSON_GetObjectItem(root, "access_token");
         expires_json = cJSON_GetObjectItem(root, "expires_in");
         if (!cJSON_IsString(token_json) || !token_json->valuestring) {
+            /* Log the raw body before freeing it (it was previously freed first,
+             * leaving this a use-after-free read). */
             cap_im_qq_log_http_failure("QQ token parse", ESP_FAIL, 200, resp.buf);
             cJSON_Delete(root);
+            free(resp.buf);
             return ESP_FAIL;
         }
 
@@ -475,6 +488,7 @@ static esp_err_t cap_im_qq_get_access_token(void)
         expires_in = cJSON_IsNumber(expires_json) ? expires_json->valueint : 7200;
         s_qq.token_expire_time = now + expires_in - 300;
         cJSON_Delete(root);
+        free(resp.buf);
     }
 
     return ESP_OK;
@@ -552,20 +566,23 @@ retry:
         cJSON *root = cJSON_Parse(resp.buf);
         cJSON *url_json;
 
-        free(resp.buf);
         if (!root) {
+            free(resp.buf);
             return ESP_FAIL;
         }
 
         url_json = cJSON_GetObjectItem(root, "url");
         if (!cJSON_IsString(url_json) || !url_json->valuestring) {
+            /* Log the raw body before freeing it (previously freed first -> UAF). */
             cap_im_qq_log_http_failure("QQ gateway parse", ESP_FAIL, 200, resp.buf);
             cJSON_Delete(root);
+            free(resp.buf);
             return ESP_FAIL;
         }
 
         strlcpy(s_qq.ws_url, url_json->valuestring, sizeof(s_qq.ws_url));
         cJSON_Delete(root);
+        free(resp.buf);
     }
 
     return ESP_OK;
@@ -690,7 +707,7 @@ static esp_err_t cap_im_qq_publish_attachment_event(const char *chat_id,
     strlcpy(event.message_id, message_id, sizeof(event.message_id));
     strlcpy(event.content_type, content_type, sizeof(event.content_type));
     event.timestamp_ms = cap_im_qq_now_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     snprintf(event.event_id, sizeof(event.event_id), "qq-attach-%" PRId64, event.timestamp_ms);
     event.text = "";
     event.payload_json = (char *)payload_json;
@@ -1148,6 +1165,9 @@ retry:
     config.buffer_size = 1024;
     config.buffer_size_tx = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -1971,6 +1991,8 @@ static const claw_cap_group_t s_qq_group = {
 
 esp_err_t cap_im_qq_register_group(void)
 {
+    cap_im_qq_init_defaults();
+
     if (claw_cap_group_exists(s_qq_group.group_id)) {
         return ESP_OK;
     }
@@ -1979,11 +2001,18 @@ esp_err_t cap_im_qq_register_group(void)
 
 void cap_im_qq_set_msg_type(int msg_type)
 {
+    if (!s_qq_initialized) {
+        return;
+    }
     s_qq.msg_type = msg_type;
 }
 
 esp_err_t cap_im_qq_set_credentials(const char *app_id, const char *app_secret)
 {
+    if (!s_qq_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!app_id || !app_secret) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1998,6 +2027,10 @@ esp_err_t cap_im_qq_set_credentials(const char *app_id, const char *app_secret)
 esp_err_t cap_im_qq_set_attachment_config(
     const cap_im_qq_attachment_config_t *config)
 {
+    if (!s_qq_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -2017,6 +2050,10 @@ esp_err_t cap_im_qq_set_attachment_config(
 
 esp_err_t cap_im_qq_start(void)
 {
+    if (!s_qq_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (s_qq.app_id[0] == '\0' || s_qq.app_secret[0] == '\0') {
         ESP_LOGE(TAG, "QQ credentials are not configured");
         return ESP_ERR_INVALID_STATE;
@@ -2032,6 +2069,10 @@ esp_err_t cap_im_qq_stop(void)
 
 esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
 {
+    if (!s_qq_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     size_t text_len;
     size_t offset = 0;
     esp_err_t last_err = ESP_OK;
@@ -2050,7 +2091,10 @@ esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
         esp_err_t err;
 
         if (chunk_len > CAP_IM_QQ_MAX_MSG_LEN) {
-            chunk_len = CAP_IM_QQ_MAX_MSG_LEN;
+            chunk_len = claw_utils_utf8_prefix_len(text + offset, CAP_IM_QQ_MAX_MSG_LEN);
+            if (chunk_len == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
         }
 
         chunk = calloc(1, chunk_len + 1);
@@ -2073,6 +2117,9 @@ esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
 
 esp_err_t cap_im_qq_send_image(const char *chat_id, const char *path, const char *caption)
 {
+    if (!s_qq_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return cap_im_qq_send_media(chat_id,
                                 path,
                                 caption,
@@ -2082,6 +2129,9 @@ esp_err_t cap_im_qq_send_image(const char *chat_id, const char *path, const char
 
 esp_err_t cap_im_qq_send_file(const char *chat_id, const char *path, const char *caption)
 {
+    if (!s_qq_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return cap_im_qq_send_media(chat_id,
                                 path,
                                 caption,

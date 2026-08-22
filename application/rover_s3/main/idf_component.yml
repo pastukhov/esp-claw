@@ -1,0 +1,13 @@
+dependencies:
+  cap_rover:
+    path: ../../../components/claw_capabilities/cap_rover
+  cap_unitv:
+    path: ../../../components/claw_capabilities/cap_unitv
+  cap_voice:
+    path: ../../../components/claw_capabilities/cap_voice
+  claw_cap:
+    path: ../../../components/claw_modules/claw_cap
+  claw_event_router:
+    path: ../../../components/claw_modules/claw_event_router
+  app_claw:
+    path: ../../../components/common/app_claw

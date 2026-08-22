@@ -132,7 +132,23 @@ static esp_err_t file_download_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
     while (!feof(file)) {
         size_t read_bytes = fread(scratch, 1, HTTP_SERVER_SCRATCH_SIZE, file);
-        if (read_bytes > 0 && httpd_resp_send_chunk(req, scratch, read_bytes) != ESP_OK) {
+        if (read_bytes == 0) {
+            /* fread returned 0: either clean EOF or a hard read error, which
+             * also leaves feof() false and would otherwise spin forever and pin
+             * this worker plus its scratch buffer. On a genuine read error,
+             * leave the chunked stream unterminated and return ESP_FAIL so the
+             * server aborts the connection: the client then sees a broken
+             * transfer instead of a cleanly finished but silently truncated
+             * file. (Headers may already be on the wire; aborting is still the
+             * most honest signal we can give.) Clean EOF just ends the loop. */
+            if (ferror(file)) {
+                free(scratch);
+                fclose(file);
+                return ESP_FAIL;
+            }
+            break;
+        }
+        if (httpd_resp_send_chunk(req, scratch, read_bytes) != ESP_OK) {
             free(scratch);
             fclose(file);
             return ESP_FAIL;
@@ -205,12 +221,41 @@ static esp_err_t files_upload_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
+static int rmdir_recursive(const char *path)
+{
+    DIR *dir = opendir(path);
+    if (!dir) return -1;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char child[HTTP_SERVER_PATH_MAX];
+        strlcpy(child, path, sizeof(child));
+        strlcat(child, "/", sizeof(child));
+        strlcat(child, entry->d_name, sizeof(child));
+
+        struct stat st = {0};
+        if (stat(child, &st) != 0) { closedir(dir); return -1; }
+
+        int rc = S_ISDIR(st.st_mode) ? rmdir_recursive(child) : unlink(child);
+        if (rc != 0) { closedir(dir); return -1; }
+    }
+    closedir(dir);
+    return rmdir(path);
+}
+
 static esp_err_t files_delete_handler(httpd_req_t *req)
 {
     char relative_path[HTTP_SERVER_PATH_MAX] = {0};
     if (http_server_query_get(req, "path", relative_path, sizeof(relative_path)) != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing path");
     }
+
+    char recursive_str[8] = {0};
+    http_server_query_get(req, "recursive", recursive_str, sizeof(recursive_str));
+    bool recursive = (strcmp(recursive_str, "1") == 0 || strcmp(recursive_str, "true") == 0);
 
     char full_path[HTTP_SERVER_PATH_MAX];
     if (http_server_resolve_storage_path(relative_path, full_path, sizeof(full_path)) != ESP_OK) {
@@ -222,9 +267,38 @@ static esp_err_t files_delete_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Path not found");
     }
 
-    int rc = S_ISDIR(st.st_mode) ? rmdir(full_path) : unlink(full_path);
-    if (rc != 0) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
+    if (S_ISDIR(st.st_mode)) {
+        if (recursive) {
+            if (rmdir_recursive(full_path) != 0) {
+                return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recursive delete failed");
+            }
+        } else {
+            DIR *check_dir = opendir(full_path);
+            if (check_dir) {
+                bool has_children = false;
+                struct dirent *de;
+                while ((de = readdir(check_dir)) != NULL) {
+                    if (strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0) {
+                        has_children = true;
+                        break;
+                    }
+                }
+                closedir(check_dir);
+                if (has_children) {
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_set_status(req, "409 Conflict");
+                    httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
+                    return httpd_resp_sendstr(req, "{\"error\":\"directory_not_empty\",\"message\":\"Directory is not empty. Use recursive delete to remove all contents.\"}");
+                }
+            }
+            if (rmdir(full_path) != 0) {
+                return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
+            }
+        }
+    } else {
+        if (unlink(full_path) != 0) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
+        }
     }
 
     httpd_resp_set_type(req, "application/json");

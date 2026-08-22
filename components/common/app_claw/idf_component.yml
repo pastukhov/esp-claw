@@ -7,11 +7,14 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_FILES} == True
     path: ../../claw_capabilities/cap_files
 
+  cap_agent_mgr:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_AGENT_MGR} == True
+    path: ../../claw_capabilities/cap_agent_mgr
+
   cap_im_platform:
     rules:
-      - if: >-
-          $CONFIG{APP_CLAW_CAP_IM_FEISHU} == True || $CONFIG{APP_CLAW_CAP_IM_QQ} == True ||
-          $CONFIG{APP_CLAW_CAP_IM_TG} == True || $CONFIG{APP_CLAW_CAP_IM_WECHAT} == True
+      - if: $CONFIG{APP_CLAW_CAP_IM_PLATFORM} == True
     path: ../../claw_capabilities/cap_im_platform
 
   cap_im_local:
@@ -24,6 +27,9 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_LLM_INSPECT} == True
     path: ../../claw_capabilities/cap_llm_inspect
 
+  cap_llm_config:
+    path: ../../claw_capabilities/cap_llm_config
+
   cap_lua:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
@@ -33,6 +39,13 @@ dependencies:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_MCP_CLIENT} == True
     path: ../../claw_capabilities/cap_mcp_client
+
+  mcp_mdns:
+    rules:
+      - if: >-
+          $CONFIG{APP_CLAW_CAP_MCP_CLIENT} == True ||
+          $CONFIG{APP_CLAW_CAP_MCP_SERVER} == True
+    path: ../mcp_mdns
 
   cap_mcp_server:
     rules:
@@ -64,10 +77,10 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_SYSTEM} == True
     path: ../../claw_capabilities/cap_system
 
-  cap_time:
+  cap_http_request:
     rules:
-      - if: $CONFIG{APP_CLAW_CAP_TIME} == True
-    path: ../../claw_capabilities/cap_time
+      - if: $CONFIG{APP_CLAW_CAP_HTTP_REQUEST} == True
+    path: ../../claw_capabilities/cap_http_request
 
   cap_web_search:
     rules:
@@ -83,11 +96,19 @@ dependencies:
   claw_event_router:
     path: ../../claw_modules/claw_event_router
 
+  claw_manager:
+    path: ../../claw_modules/claw_manager
+
   claw_memory:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_MEMORY} == True
     path: ../../claw_modules/claw_memory
 
   claw_skill:
     path: ../../claw_modules/claw_skill
+
+  claw_utils:
+    path: ../../claw_modules/claw_utils
 
   skill_builder:
     path: ../../common/skill_builder
@@ -95,11 +116,10 @@ dependencies:
   lua_module_builder:
     path: ../../common/lua_module_builder
 
-  emote:
+  system_ui:
     rules:
       - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
-      - if: $CONFIG{APP_CLAW_ENABLE_EMOTE} == True
-    path: ../emote
+    path: ../system_ui
 
   # --- lua_driver (hardware peripheral drivers) ---
 
@@ -133,6 +153,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_DRIVER_PCNT} == True
     path: ../../lua_modules/lua_driver_pcnt
 
+  lua_driver_rmt:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_DRIVER_RMT} == True
+    path: ../../lua_modules/lua_driver_rmt
+
   lua_driver_touch:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
@@ -165,6 +191,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
       - if: $CONFIG{APP_CLAW_LUA_MODULE_BUTTON} == True
     path: ../../lua_modules/lua_module_button
+
+  lua_module_ble:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_BLE} == True
+    path: ../../lua_modules/lua_module_ble
 
   lua_module_ble_hid:
     rules:
@@ -271,6 +303,12 @@ dependencies:
       - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT} == True
     path: ../../lua_modules/lua_module_lcd_touch
 
+  lua_module_ledc:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_LEDC} == True
+    path: ../../lua_modules/lua_module_ledc
+
   lua_module_led_strip:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
@@ -295,12 +333,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_SCI} == True
     path: ../../lua_modules/lua_module_sci
 
-  lua_module_ssd1306:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_SSD1306} == True
-    path: ../../lua_modules/lua_module_ssd1306
-
   lua_module_storage:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
@@ -316,6 +348,6 @@ dependencies:
   lua_module_vision:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_VISION} == True
       - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_VISION} == True
     path: ../../lua_modules/lua_module_vision

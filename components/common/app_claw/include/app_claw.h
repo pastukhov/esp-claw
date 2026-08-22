@@ -21,6 +21,8 @@ extern "C" {
 #define APP_CLAW_PATH_LEN             64
 #define APP_CLAW_FILE_PATH_LEN        96
 
+typedef struct claw_core_state *claw_core_handle_t;
+
 typedef struct {
     char llm_api_key[APP_CLAW_STR_LEN];
     char llm_backend_type[APP_CLAW_SHORT_STR_LEN];
@@ -47,24 +49,37 @@ typedef struct {
     char search_brave_key[APP_CLAW_STR_LEN];
     char search_tavily_key[APP_CLAW_STR_LEN];
     char search_http_allowlist[APP_CLAW_STR_LEN];
+    char asr_provider[APP_CLAW_SHORT_STR_LEN];
+    char asr_api_key[APP_CLAW_STR_LEN];
+    char asr_workspace_id[APP_CLAW_STR_LEN];
+    char asr_language_hint[APP_CLAW_SHORT_STR_LEN];
+    char asr_model[APP_CLAW_MODEL_LEN];
+    char asr_endpoint[APP_CLAW_STR_LEN];
     char enabled_cap_groups[APP_CLAW_STR_LEN];
     char llm_visible_cap_groups[APP_CLAW_STR_LEN];
     char enabled_lua_modules[APP_CLAW_STR_LEN];
+    /**
+     * Optional replacement for the built-in skills/subagent-oriented system
+     * prompt. When non-NULL and non-empty, app_claw_start() uses this string
+     * verbatim as the root agent's system prompt instead of
+     * APP_SYSTEM_PROMPT, and does not append the root/subagent role overlays
+     * (those describe the skill-and-delegation workflow the override
+     * replaces). Must outlive the call to app_claw_start() (a string literal
+     * or static buffer, not a stack buffer).
+     */
+    const char *system_prompt_override;
 } app_claw_config_t;
 
-typedef struct {
-    char fatfs_base_path[APP_CLAW_PATH_LEN];
-    char memory_session_root[APP_CLAW_PATH_LEN];
-    char memory_root_dir[APP_CLAW_PATH_LEN];
-    char skills_root_dir[APP_CLAW_PATH_LEN];
-    char lua_root_dir[APP_CLAW_PATH_LEN];
-    char router_rules_path[APP_CLAW_FILE_PATH_LEN];
-    char scheduler_rules_path[APP_CLAW_FILE_PATH_LEN];
-    char im_attachment_root[APP_CLAW_PATH_LEN];
-} app_claw_storage_paths_t;
+typedef esp_err_t (*app_claw_save_config_fn)(const app_claw_config_t *config,
+                                             void *user_ctx);
 
-esp_err_t app_claw_start(const app_claw_config_t *config,
-                         const app_claw_storage_paths_t *paths);
+esp_err_t app_claw_set_save_config_callback(app_claw_save_config_fn save_config,
+                                            void *user_ctx);
+esp_err_t app_claw_start(const app_claw_config_t *config);
+esp_err_t app_claw_update_config(const app_claw_config_t *config);
+esp_err_t app_claw_get_config(app_claw_config_t *out_config);
+esp_err_t app_claw_apply_config(const app_claw_config_t *config);
+claw_core_handle_t app_claw_get_core(void);
 esp_err_t app_claw_ui_start(void);
 esp_err_t app_claw_set_network_status(bool sta_connected, const char *ap_ssid);
 

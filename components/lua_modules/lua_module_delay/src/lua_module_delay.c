@@ -14,16 +14,30 @@
 #include "freertos/task.h"
 
 #define LUA_MODULE_DELAY_US_MAX_BLOCKING 1000000U
+#define LUA_MODULE_DELAY_MS_STOP_SLICE 100U
 
 static int lua_module_delay_sleep_ms(lua_State *L)
 {
     lua_Integer ms = luaL_checkinteger(L, 1);
+    uint32_t remaining;
 
     if (ms < 0) {
         ms = 0;
     }
 
-    vTaskDelay(pdMS_TO_TICKS((uint32_t)ms));
+    remaining = (uint32_t)ms;
+    while (remaining > 0) {
+        uint32_t step = remaining > LUA_MODULE_DELAY_MS_STOP_SLICE ?
+                        LUA_MODULE_DELAY_MS_STOP_SLICE : remaining;
+        if (cap_lua_runtime_stop_requested(L)) {
+            return luaL_error(L, "stop requested");
+        }
+        vTaskDelay(pdMS_TO_TICKS(step));
+        remaining -= step;
+    }
+    if (cap_lua_runtime_stop_requested(L)) {
+        return luaL_error(L, "stop requested");
+    }
     return 0;
 }
 

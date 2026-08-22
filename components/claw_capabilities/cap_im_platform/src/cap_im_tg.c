@@ -5,6 +5,7 @@
  */
 #include "cap_im_tg.h"
 #include "cap_im_attachment.h"
+#include "claw_utils_string.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -20,6 +21,7 @@
 #include "claw_task.h"
 #include "claw_event_publisher.h"
 #include "esp_crt_bundle.h"
+#include "esp_attr.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -80,11 +82,20 @@ typedef struct {
     size_t seen_update_idx;
 } cap_im_tg_state_t;
 
-static cap_im_tg_state_t s_tg = {
-    .max_inbound_file_bytes = 2 * 1024 * 1024,
-    .enable_inbound_attachments = false,
-    .next_update_id = 0,
-};
+static EXT_RAM_BSS_ATTR cap_im_tg_state_t s_tg;
+static bool s_tg_initialized;
+
+static void cap_im_tg_init_defaults(void)
+{
+    if (s_tg_initialized) {
+        return;
+    }
+
+    s_tg.max_inbound_file_bytes = 2 * 1024 * 1024;
+    s_tg.enable_inbound_attachments = false;
+    s_tg.next_update_id = 0;
+    s_tg_initialized = true;
+}
 
 static int64_t cap_im_tg_now_ms(void)
 {
@@ -198,9 +209,12 @@ static esp_err_t cap_im_tg_api_call(const char *method,
     config.event_handler = cap_im_tg_http_event_handler;
     config.user_data = &resp;
     config.timeout_ms = (CAP_IM_TG_POLL_TIMEOUT_S + 5) * 1000;
-    config.buffer_size = 1024;
+    config.buffer_size = 2048;
     config.buffer_size_tx = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -274,7 +288,7 @@ static esp_err_t cap_im_tg_publish_attachment_event(const char *chat_id,
     strlcpy(event.message_id, message_id, sizeof(event.message_id));
     strlcpy(event.content_type, content_type, sizeof(event.content_type));
     event.timestamp_ms = cap_im_tg_now_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     snprintf(event.event_id, sizeof(event.event_id), "tg-attach-%" PRId64, event.timestamp_ms);
     event.text = "";
     event.payload_json = (char *)payload_json;
@@ -1008,6 +1022,9 @@ static esp_err_t cap_im_tg_send_multipart_file(const char *method,
     config.buffer_size = 2048;
     config.buffer_size_tx = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -1396,6 +1413,8 @@ static const claw_cap_group_t s_tg_group = {
 
 esp_err_t cap_im_tg_register_group(void)
 {
+    cap_im_tg_init_defaults();
+
     if (claw_cap_group_exists(s_tg_group.group_id)) {
         return ESP_OK;
     }
@@ -1405,6 +1424,10 @@ esp_err_t cap_im_tg_register_group(void)
 
 esp_err_t cap_im_tg_set_token(const char *bot_token)
 {
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!bot_token) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1419,6 +1442,10 @@ esp_err_t cap_im_tg_set_token(const char *bot_token)
 esp_err_t cap_im_tg_set_attachment_config(
     const cap_im_tg_attachment_config_t *config)
 {
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1438,6 +1465,10 @@ esp_err_t cap_im_tg_set_attachment_config(
 
 esp_err_t cap_im_tg_start(void)
 {
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (s_tg.bot_token[0] == '\0') {
         ESP_LOGE(TAG, "Telegram bot token is not configured");
         return ESP_ERR_INVALID_STATE;
@@ -1453,6 +1484,10 @@ esp_err_t cap_im_tg_stop(void)
 
 esp_err_t cap_im_tg_send_text(const char *chat_id, const char *text)
 {
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     size_t text_len;
     size_t offset = 0;
     esp_err_t last_err = ESP_OK;
@@ -1471,7 +1506,10 @@ esp_err_t cap_im_tg_send_text(const char *chat_id, const char *text)
         esp_err_t err;
 
         if (chunk_len > CAP_IM_TG_MAX_MSG_LEN) {
-            chunk_len = CAP_IM_TG_MAX_MSG_LEN;
+            chunk_len = claw_utils_utf8_prefix_len(text + offset, CAP_IM_TG_MAX_MSG_LEN);
+            if (chunk_len == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
         }
 
         chunk = calloc(1, chunk_len + 1);
@@ -1494,10 +1532,16 @@ esp_err_t cap_im_tg_send_text(const char *chat_id, const char *text)
 
 esp_err_t cap_im_tg_send_image(const char *chat_id, const char *path, const char *caption)
 {
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return cap_im_tg_send_media(chat_id, path, caption, true);
 }
 
 esp_err_t cap_im_tg_send_file(const char *chat_id, const char *path, const char *caption)
 {
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
     return cap_im_tg_send_media(chat_id, path, caption, false);
 }

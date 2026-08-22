@@ -1,16 +1,40 @@
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_80M=y
+# N8R8 (quad flash + octal PSRAM) documented combo: flash 80MHz SDR + PSRAM 40MHz DDR.
+# 80/80 is non-documented and marginal — large PSRAM transfers (e.g. fatfs 42KB
+# buffer) wedge in tlsf_malloc. 40MHz DDR needs no MSPI timing tuning → robust.
+CONFIG_SPIRAM_SPEED_40M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_USE_MALLOC=y
+# Make the I2C master driver PSRAM-safe: ISR handler + driver structs in
+# internal RAM/IRAM instead of PSRAM (MALLOC_CAP_DEFAULT). Without this the i2c
+# bus structs land in PSRAM and alloc/free traversal of their TLSF metadata
+# wedges (IWDT). Structs are tiny, so internal RAM cost is negligible.
+CONFIG_I2C_ISR_IRAM_SAFE=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=n
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+# Match the known-good M5/Arduino qio_opi config: flash 80MHz + PSRAM 80MHz,
+# both on the shared MSPI clock (a 80/40 split wedges PSRAM reads after flash ops).
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Octal PSRAM on ESP32-S3 requires QIO flash for valid MSPI timing tuning.
+# DIO flash + Octal PSRAM leaves PSRAM timing marginal: the memory test passes
+# but the cache wedges under load (i2c_master init) → panic_enable_cache hangs
+# → IWDT reset. Matches the M5Stack-validated qio_opi memory type. (esp-idf #13019)
+# CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT is not set
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+# DIAG: run panic handler from IRAM so it doesn't re-enable cache (that path
+# hangs in panic_enable_cache, masking the real fault). Lets the chip print
+# the actual exception (e.g. "Cache disabled but cached memory accessed").
+CONFIG_ESP_PANIC_HANDLER_IRAM=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_FATFS_LFN_HEAP=y
@@ -20,4 +44,33 @@ CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=30
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
-CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_APP_CLAW_CAP_IM_TG=y
+CONFIG_APP_CLAW_CAP_IM_QQ=n
+CONFIG_APP_CLAW_CAP_IM_FEISHU=n
+CONFIG_APP_CLAW_CAP_IM_WECHAT=n
+CONFIG_APP_CLAW_CAP_IM_LOCAL=n
+# rover_s3 runs its own console REPL (rover_s3_cli.c) and its own display FSM
+# (rover_s3_display.c); don't let app_claw start a second console or pull in
+# the generic system_ui runtime (ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT is stubbed
+# to n in main/Kconfig.projbuild, which already keeps system_ui out of the
+# build).
+CONFIG_APP_CLAW_ENABLE_CLI=n
+CONFIG_APP_CLAW_CAP_FILES=y
+CONFIG_APP_CLAW_CAP_MEMORY=y
+CONFIG_APP_CLAW_MEMORY_MODE_LIGHTWEIGHT=y
+CONFIG_APP_CLAW_CAP_EVENT_ROUTER=y
+CONFIG_APP_CLAW_CAP_CORE=y
+CONFIG_APP_CLAW_CAP_SKILL_MGR=y
+CONFIG_APP_CLAW_CAP_SYSTEM=y
+CONFIG_APP_CLAW_CAP_SESSION_MGR=y
+# Not used by rover_s3 today; keep the footprint small on a 3 MB partition.
+CONFIG_APP_CLAW_CAP_SCHEDULER=n
+CONFIG_APP_CLAW_CAP_LUA=n
+CONFIG_APP_CLAW_CAP_MCP_CLIENT=n
+CONFIG_APP_CLAW_CAP_MCP_SERVER=n
+CONFIG_APP_CLAW_CAP_LLM_INSPECT=n
+CONFIG_APP_CLAW_CAP_HTTP_REQUEST=n
+CONFIG_APP_CLAW_CAP_WEB_SEARCH=n
+CONFIG_APP_CLAW_CAP_ROUTER_MGR=n
+CONFIG_APP_CLAW_CAP_AGENT_MGR=n
