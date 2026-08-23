@@ -14,31 +14,24 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # wedges (IWDT). Structs are tiny, so internal RAM cost is negligible.
 CONFIG_I2C_ISR_IRAM_SAFE=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
-# Force ALL FreeRTOS task stacks into internal RAM, even ones claw_task.c
-# requests as CLAW_TASK_STACK_PREFER_PSRAM (event_router, claw_core's agent
-# loop, cap_im_tg polling, claw_memory async extract, cap_system). Every one
-# of those tasks' call graphs can hit a raw flash/FAT read (session, memory,
-# skill files), which briefly disables the flash cache via
-# spi_flash_disable_interrupts_caches_and_other_cpu(). A PSRAM-backed stack
-# is unreachable during that window, and esp_task_stack_is_sane_cache_disabled()
-# asserts and reboots the device. claw_task_memory_caps() already falls back
-# to MALLOC_CAP_INTERNAL for every non-PSRAM_ONLY policy when this Kconfig
-# option is off, so this one line fixes the whole PREFER_PSRAM task family at
-# once instead of patching each call site. No PSRAM_ONLY task is active in
-# this build (scheduler/lua capabilities are disabled), so nothing here can
-# fail allocation outright. Combined internal-RAM stack budget for the tasks
-# that are active (cap_system, cap_im_tg, claw_memory extract, claw_core) is
-# ~35KB, well within the ~250KB internal RAM free at boot.
-CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n
+# NOTE: the flash-cache-disable crash (esp_task_stack_is_sane_cache_disabled())
+# is fixed per-task via CLAW_TASK_STACK_INTERNAL_ONLY at the three call sites
+# that actually perform flash/FAT reads (claw_event_router.c, claw_core.c,
+# claw_memory_session.c), not via this Kconfig option. A global
+# CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n was tried first and reverted:
+# it forced every CLAW_TASK_STACK_PREFER_PSRAM task into internal RAM
+# (including cap_im_tg and cap_system, which don't need it), leaving too
+# little internal/DMA-capable RAM for esp-aes's hardware-crypto work buffer
+# during concurrent HTTPS (Telegram polling + an LLM call at the same time
+# failed with "esp-aes: Failed to allocate memory"). See the plan doc's
+# 2026-08-23 update for the full story.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=n
 # mbedTLS's per-connection I/O buffers (16KB in + 16KB out = 32KB, since
-# DYNAMIC_BUFFER is off) default to internal-RAM-only allocation. Combined
-# with CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n (below) moving ~35KB of
-# task stacks into that same internal RAM, mbedtls_ssl_setup() failed with
-# MBEDTLS_ERR_SSL_ALLOC_FAILED (-0x7F00) on every outbound HTTPS call. These
-# are heap buffers, not a task stack, so PSRAM is safe here: nothing reads
-# them during the flash-cache-disabled window that CLAW_TASK_STACK_* is
-# guarding against.
+# DYNAMIC_BUFFER is off) default to internal-RAM-only allocation, which
+# starves internal RAM when task stacks also live there. These are heap
+# buffers, not a task stack, so PSRAM is safe here: nothing reads them
+# during the flash-cache-disabled window CLAW_TASK_STACK_INTERNAL_ONLY
+# guards against.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
