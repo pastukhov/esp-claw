@@ -52,7 +52,8 @@
         "type": "send_message",
         "input": {
           "channel": "web",
-          "chat_id": "web"
+          "chat_id": "web",
+          "message": "{{event.text}}"
         }
       }
     ]
