@@ -13,7 +13,7 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # bus structs land in PSRAM and alloc/free traversal of their TLSF metadata
 # wedges (IWDT). Structs are tiny, so internal RAM cost is negligible.
 CONFIG_I2C_ISR_IRAM_SAFE=y
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=n
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
@@ -74,3 +74,17 @@ CONFIG_APP_CLAW_CAP_HTTP_REQUEST=n
 CONFIG_APP_CLAW_CAP_WEB_SEARCH=n
 CONFIG_APP_CLAW_CAP_ROUTER_MGR=n
 CONFIG_APP_CLAW_CAP_AGENT_MGR=n
+# cap_voice's wake-word pipeline (cap_voice_pipeline.c) reads whatever WakeNet
+# model esp-sr packs into the `model` partition (512 KB) — without this,
+# movemodel.py reports "No speech models loaded". No Russian WakeNet exists in
+# ESP-SR (only CN/EN/JA/FR; RU is "planned" per Espressif's TTS Pipeline V3 as
+# of 2026-08); a custom on-device Russian wake word needs a separate TFLite
+# Micro model (see docs/superpowers/plans/2026-05-21-rover-s3.md). "Jarvis"
+# picked as a rover-fitting placeholder wake word in the meantime.
+#
+# No MultiNet: cap_voice_pipeline.c's English MultiNet models (mn6_en alone is
+# 3.7 MB) can't fit the 512 KB partition, and MultiNet only supports CN/EN
+# anyway — useless for Russian commands regardless of size. All recognized
+# speech goes through Whisper (cap_voice_whisper.c already hardcodes
+# language="ru"), not the local fixed English command list.
+CONFIG_SR_WN_WN9_JARVIS_TTS=y
