@@ -61,6 +61,7 @@ static void on_transcript(const char *cmd_id, const char *text, void *ctx)
     strlcpy(ev.event_type,     "voice_input",  sizeof(ev.event_type));
     strlcpy(ev.source_channel, "voice",        sizeof(ev.source_channel));
     strlcpy(ev.target_channel, "voice",        sizeof(ev.target_channel));
+    strlcpy(ev.chat_id,        "voice",        sizeof(ev.chat_id));
     ev.text = (char *)text;
     claw_event_router_publish(&ev);
 }

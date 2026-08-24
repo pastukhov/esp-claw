@@ -152,13 +152,18 @@ esp_err_t cap_voice_audio_deinit(void)
 
 esp_err_t cap_voice_audio_read(int16_t *buf, size_t samples, size_t *out_read)
 {
-    int bytes = esp_codec_dev_read(s_mic_dev, buf,
-                                    (int)(samples * sizeof(int16_t)));
-    if (bytes < 0) {
+    /* esp_codec_dev_read() returns a status code (ESP_CODEC_DEV_OK on
+     * success), not a byte count — it's a blocking read that either fills
+     * the full requested length or fails. Treating the return value as a
+     * byte count (as this used to) makes every successful read look like a
+     * 0-byte read, so the caller never sees any mic data even though the
+     * hardware capture itself works fine. */
+    int ret = esp_codec_dev_read(s_mic_dev, buf, (int)(samples * sizeof(int16_t)));
+    if (ret != ESP_CODEC_DEV_OK) {
         return ESP_FAIL;
     }
     if (out_read) {
-        *out_read = (size_t)bytes / sizeof(int16_t);
+        *out_read = samples;
     }
     return ESP_OK;
 }
