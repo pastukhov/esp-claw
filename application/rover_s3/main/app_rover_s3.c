@@ -10,8 +10,6 @@
 
 #include "app_capabilities.h"
 #include "app_claw.h"
-#include "cap_rover.h"
-#include "cap_unitv.h"
 #include "cap_voice.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -27,10 +25,9 @@ static const char *TAG = "app_rover_s3";
 #define ROVER_S3_SYSTEM_PROMPT \
     "You are AI Rover S3, a mecanum robot with a gripper, a camera, and a speaker. " \
     "Answer briefly in the user's language. " \
-    "Use rover_move for movement, rover_turn for rotation, " \
-    "unitv_scan for quick detection, unitv_capture for scene analysis. " \
-    "Use voice_say to speak responses aloud when the user communicates via voice. " \
-    "For multi-step tasks, activate rover_ops or rover_search first."
+    "Driving, gripper, and camera controls are operated manually from the device's " \
+    "web UI, not by you; you do not currently have movement or vision tools. " \
+    "Use voice_say to speak responses aloud when the user communicates via voice."
 
 rover_s3_settings_t g_settings;
 
@@ -57,79 +54,15 @@ static void voice_ui_cb(cap_voice_ui_state_t state, void *ctx)
 }
 
 /* --- external capability groups registered with app_claw's generic bootstrap ---
- * cap_rover / cap_unitv / cap_voice are rover_s3-specific hardware
- * capabilities with no generic app_claw counterpart. Each "prepare" callback
- * runs the board-specific hardware init (I2C/UART bring-up); each "reg"
- * callback registers the capability's tools with claw_cap and, where the
- * original app also wired a CLI command set, does that too. app_claw calls
- * prepare() then reg() for each enabled group before starting claw_cap. */
-
-static esp_err_t app_cap_prepare_rover(const app_claw_config_t *config,
-                                       const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_rover_init(&(cap_rover_config_t){
-                              .i2c_port = 1,   /* external I2C / Grove: GPIO 9/10 */
-                              .sda_gpio = 9,
-                              .scl_gpio = 10,
-                              .i2c_freq_hz = 100000,
-                              .rover_addr = 0x38,
-                              .gripper_servo_idx = 1,
-                              .gripper_open_angle = 35,
-                              .gripper_close_angle = 150,
-                              .hw_task_stack_size = 4096,
-                              .hw_task_priority = 5,
-                              .hw_task_core = 0,
-                          });
-}
-
-static esp_err_t app_cap_register_rover(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    ESP_RETURN_ON_ERROR(cap_rover_register_group(), TAG, "register rover");
-    cap_rover_register_cli();
-    return ESP_OK;
-}
-
-static esp_err_t app_cap_prepare_unitv(const app_claw_config_t *config,
-                                       const app_claw_storage_paths_t *paths)
-{
-    (void)paths;
-    ESP_RETURN_ON_ERROR(cap_unitv_init(&(cap_unitv_config_t){
-                            .uart_port = 1,
-                            .tx_gpio = 5,
-                            .rx_gpio = 6,
-                            .baud_rate = 115200,
-                            .rx_buffer_bytes = 4096,
-                            .default_timeout_ms = 7000,
-                            .capture_timeout_ms = 12000,
-                            .max_jpeg_bytes = 6144,
-                        }),
-                        TAG, "unitv init");
-    cap_unitv_set_vision_config(&(cap_unitv_vision_config_t){
-        .api_key = config->llm_api_key,
-        .backend_type = config->llm_backend_type,
-        .model = config->llm_model,
-        .base_url = config->llm_base_url,
-        .auth_type = config->llm_auth_type,
-        .timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10),
-        .max_response_tokens = 256,
-    });
-    return ESP_OK;
-}
-
-static esp_err_t app_cap_register_unitv(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    ESP_RETURN_ON_ERROR(cap_unitv_register_group(), TAG, "register unitv");
-    cap_unitv_register_cli();
-    return ESP_OK;
-}
+ * cap_voice is a rover_s3-specific hardware capability with no generic
+ * app_claw counterpart. Rover movement, gripper, and camera used to be
+ * cap_rover/cap_unitv here too, but that hardware now lives behind an
+ * external MCP server instead of this firmware's own I2C/UART drivers, so
+ * those two groups are no longer registered. Each "prepare" callback runs
+ * the board-specific hardware init; each "reg" callback registers the
+ * capability's tools with claw_cap and, where the original app also wired a
+ * CLI command set, does that too. app_claw calls prepare() then reg() for
+ * each enabled group before starting claw_cap. */
 
 static esp_err_t app_cap_prepare_voice(const app_claw_config_t *config,
                                        const app_claw_storage_paths_t *paths)
@@ -168,22 +101,6 @@ static esp_err_t app_cap_register_voice(const app_claw_config_t *config,
 static esp_err_t register_rover_s3_capabilities(void)
 {
     ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
-                            .group_id = "cap_rover",
-                            .display_name = "Rover",
-                            .llm_visible_by_default = true,
-                            .prepare = app_cap_prepare_rover,
-                            .reg = app_cap_register_rover,
-                        }),
-                        TAG, "register external group cap_rover");
-    ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
-                            .group_id = "cap_unitv",
-                            .display_name = "UnitV",
-                            .llm_visible_by_default = true,
-                            .prepare = app_cap_prepare_unitv,
-                            .reg = app_cap_register_unitv,
-                        }),
-                        TAG, "register external group cap_unitv");
-    ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
                             .group_id = "cap_voice",
                             .display_name = "Voice",
                             .llm_visible_by_default = true,
@@ -217,7 +134,7 @@ static void build_app_claw_config(const rover_s3_settings_t *s, app_claw_config_
     /* Empty enabled_cap_groups = enable every compiled-in group (Kconfig
      * already trims the built-in set to what rover_s3 needs). */
     out->enabled_cap_groups[0] = '\0';
-    strlcpy(out->llm_visible_cap_groups, "cap_rover,cap_unitv,cap_skill,cap_voice",
+    strlcpy(out->llm_visible_cap_groups, "cap_skill,cap_voice",
            sizeof(out->llm_visible_cap_groups));
     out->system_prompt_override = ROVER_S3_SYSTEM_PROMPT;
 }

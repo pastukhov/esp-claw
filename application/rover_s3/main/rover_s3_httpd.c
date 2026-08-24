@@ -134,7 +134,9 @@ static const char *k_html =
     "<span class='muted' id='stMotion'>--</span>"
     "<span class='muted' id='stGrip'>--</span>"
     "</div></div>"
-    "<div class='card'>"
+    "<div class='muted' id='roverHint' style='display:none;margin-bottom:6px'>"
+    "Rover control unavailable (waiting for MCP tools)</div>"
+    "<div class='card' id='driveCtrls'>"
     "<div id='joyWrap'><canvas id='joy' width='180' height='180'></canvas></div>"
     "<div class='spd-row'><span class='muted'>Speed</span>"
     "<input type='range' id='spdSlider' min='10' max='100' value='80'>"
@@ -150,7 +152,9 @@ static const char *k_html =
     "</div></div></div>"
     /* ── Vision ── */
     "<div class='panel' id='p1'>"
-    "<div class='card'>"
+    "<div class='muted' id='visionHint' style='display:none;margin-bottom:6px'>"
+    "Vision unavailable (waiting for MCP tools)</div>"
+    "<div class='card' id='visionCtrls'>"
     "<div class='row'>"
     "<button onclick=\"vscan('SCAN')\">Scan</button>"
     "<button onclick=\"vscan('OBJECTS')\">Objects</button>"
@@ -236,7 +240,13 @@ static const char *k_html =
     "document.getElementById('stMotion').textContent=j.motion?'x:'+j.x+' y:'+j.y+' z:'+j.z:'Stopped';"
     "document.getElementById('stGrip').textContent='Grip:'+j.gripper;"
     "document.getElementById('ipLabel').textContent=j.ip||'';"
+    "setAvail('driveCtrls','roverHint',!!j.rover_available);"
+    "setAvail('visionCtrls','visionHint',!!j.vision_available);"
     "}catch(e){}}"
+    "function setAvail(ctrlsId,hintId,ok){"
+    "const c=document.getElementById(ctrlsId),h=document.getElementById(hintId);"
+    "c.style.opacity=ok?'1':'.4';c.style.pointerEvents=ok?'auto':'none';"
+    "h.style.display=ok?'none':'block';}"
     /* vision */
     "async function vscan(c){const o=document.getElementById('vOut');o.textContent='scanning...';"
     "try{o.textContent=JSON.stringify(await(await fetch('/vision?cmd='+c)).json(),null,2);}catch(e){o.textContent=''+e;}}"
@@ -314,11 +324,19 @@ static esp_err_t h_status(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
     const char *ip = rover_s3_wifi_get_ip();
-    char buf[256];
+    /* rover_move/unitv_scan are no longer registered locally; the drive/vision
+     * panels stay in the UI but go inactive until an MCP-provided capability
+     * registers the same tool ids under claw_cap. */
+    bool rover_available = claw_cap_find("rover_move") != NULL;
+    bool vision_available = claw_cap_find("unitv_scan") != NULL;
+    char buf[320];
     int n = snprintf(buf, sizeof(buf),
                      "{\"state\":\"IDLE\",\"motion\":0,\"x\":0,\"y\":0,\"z\":0,"
-                     "\"gripper\":\"unknown\",\"ip\":\"%s\"}",
-                     ip ? ip : "");
+                     "\"gripper\":\"unknown\",\"ip\":\"%s\","
+                     "\"rover_available\":%s,\"vision_available\":%s}",
+                     ip ? ip : "",
+                     rover_available ? "true" : "false",
+                     vision_available ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }

@@ -14,7 +14,7 @@ idf_component_register(
         esp_http_server cjson
         captive_dns
         board_support
-        cap_rover cap_unitv cap_voice
+        cap_voice
         claw_cap claw_event_router
         app_claw
 )
