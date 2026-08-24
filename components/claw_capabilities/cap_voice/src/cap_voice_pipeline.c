@@ -107,6 +107,7 @@ whisper_fallback:
         .api_key  = s_cfg.whisper_api_key,
         .base_url = s_cfg.whisper_base_url,
         .language = "ru",
+        .model    = s_cfg.whisper_model,
     };
     if (cap_voice_whisper_transcribe(&wcfg, s_record_buf,
                                       s_record_pos, &transcript) == ESP_OK

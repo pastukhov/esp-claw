@@ -42,7 +42,7 @@ esp_err_t cap_voice_tts_speak(const cap_voice_tts_config_t *cfg,
                                const char *text)
 {
     cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "model", "tts-1");
+    cJSON_AddStringToObject(body, "model", cfg->model && cfg->model[0] ? cfg->model : "");
     cJSON_AddStringToObject(body, "input", text);
     cJSON_AddStringToObject(body, "voice",
         cfg->voice ? cfg->voice : "alloy");

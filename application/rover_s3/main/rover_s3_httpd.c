@@ -608,6 +608,8 @@ static esp_err_t h_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(j, "tg_bot_token",  s->tg_bot_token);
     cJSON_AddStringToObject(j, "time_timezone", s->time_timezone);
     cJSON_AddStringToObject(j, "tts_voice",     s->tts_voice);
+    cJSON_AddStringToObject(j, "tts_model",     s->tts_model);
+    cJSON_AddStringToObject(j, "whisper_model", s->whisper_model);
     cJSON_AddStringToObject(j, "voice_enabled", s->voice_enabled);
 
     char *out = cJSON_PrintUnformatted(j);
@@ -708,6 +710,8 @@ static esp_err_t h_config_post(httpd_req_t *req)
             SET_J("tg_bot_token",    tg_bot_token);
             SET_J("time_timezone",   time_timezone);
             SET_J("tts_voice",       tts_voice);
+            SET_J("tts_model",       tts_model);
+            SET_J("whisper_model",   whisper_model);
             SET_J("voice_enabled",   voice_enabled);
 #undef SET_J
             cJSON_Delete(j);
@@ -731,6 +735,8 @@ static esp_err_t h_config_post(httpd_req_t *req)
         SET_FORM("tg_bot_token",    tg_bot_token);
         SET_FORM("time_timezone",   time_timezone);
         SET_FORM("tts_voice",       tts_voice);
+        SET_FORM("tts_model",       tts_model);
+        SET_FORM("whisper_model",   whisper_model);
         SET_FORM("voice_enabled",   voice_enabled);
 #undef SET_FORM
     }

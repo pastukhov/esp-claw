@@ -10,6 +10,7 @@ typedef struct {
     const char *api_key;
     const char *base_url;
     const char *language;
+    const char *model;  /* transcription model name, e.g. "whisper-1" */
 } cap_voice_whisper_config_t;
 
 esp_err_t cap_voice_whisper_transcribe(const cap_voice_whisper_config_t *cfg,

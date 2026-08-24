@@ -9,6 +9,7 @@ typedef struct {
     const char *api_key;
     const char *base_url;
     const char *voice;  /* "alloy", "nova", "shimmer", "echo", "fable", "onyx" */
+    const char *model;  /* TTS model name; same model configured for chat */
 } cap_voice_tts_config_t;
 
 /* Synthesize text to speech and play it through ES8311.

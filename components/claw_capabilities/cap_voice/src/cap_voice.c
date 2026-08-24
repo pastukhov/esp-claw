@@ -90,6 +90,7 @@ static esp_err_t voice_say_execute(const char *input_json,
         .api_key  = s_config.tts_api_key ? s_config.tts_api_key : "",
         .base_url = s_config.tts_base_url,
         .voice    = s_config.tts_voice,
+        .model    = s_config.tts_model,
     };
     ui_notify(CAP_VOICE_UI_SPEAKING);
     esp_err_t err = cap_voice_tts_speak(&tcfg, text);
@@ -191,6 +192,7 @@ esp_err_t cap_voice_start(void)
                                ? s_config.multinet_threshold : 0.85f,
         .whisper_api_key = s_config.whisper_api_key,
         .whisper_base_url = s_config.whisper_base_url,
+        .whisper_model   = s_config.whisper_model,
         .tts_api_key     = s_config.tts_api_key,
         .tts_base_url    = s_config.tts_base_url,
     };
@@ -211,6 +213,7 @@ esp_err_t cap_voice_speak(const char *text)
         .api_key  = s_config.tts_api_key,
         .base_url = s_config.tts_base_url,
         .voice    = s_config.tts_voice,
+        .model    = s_config.tts_model,
     };
     return cap_voice_tts_speak(&tcfg, text);
 }

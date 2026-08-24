@@ -74,11 +74,17 @@ static esp_err_t app_cap_prepare_voice(const app_claw_config_t *config,
                             ? g_settings.whisper_api_key : g_settings.llm_api_key,
         .whisper_base_url = g_settings.whisper_base_url[0]
                             ? g_settings.whisper_base_url : g_settings.llm_base_url,
+        .whisper_model    = g_settings.whisper_model[0] ? g_settings.whisper_model : "whisper-1",
         .tts_api_key      = g_settings.tts_api_key[0]
                             ? g_settings.tts_api_key : g_settings.llm_api_key,
         .tts_base_url     = g_settings.tts_base_url[0]
                             ? g_settings.tts_base_url : g_settings.llm_base_url,
         .tts_voice        = g_settings.tts_voice[0] ? g_settings.tts_voice : "alloy",
+        /* TTS and Whisper use their own model settings (tts_model/whisper_model),
+         * separate from the chat model (llm_model): a chat/vision model like
+         * openrouter/auto isn't a real TTS or transcription model, so the two
+         * can't be unified into one field. */
+        .tts_model        = g_settings.tts_model[0] ? g_settings.tts_model : "tts-1",
         .wake_sensitivity = atof(g_settings.wake_sensitivity[0]
                                  ? g_settings.wake_sensitivity : "0.7"),
         .multinet_threshold = atof(g_settings.multinet_threshold[0]

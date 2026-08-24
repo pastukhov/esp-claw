@@ -62,7 +62,7 @@ esp_err_t cap_voice_whisper_transcribe(const cap_voice_whisper_config_t *cfg,
     if (!wav) return ESP_ERR_NO_MEM;
 
     const char *boundary  = "----ESP32WavBoundary";
-    const char *model     = "whisper-1";
+    const char *model     = cfg->model && cfg->model[0] ? cfg->model : "whisper-1";
     const char *lang      = cfg->language ? cfg->language : "ru";
 
     char part_hdr[256];
@@ -86,9 +86,12 @@ esp_err_t cap_voice_whisper_transcribe(const cap_voice_whisper_config_t *cfg,
     memcpy(body + phlen + wav_len, model_part, mplen);
     free(wav);
 
+    /* base_url follows this project's convention (matches llm_base_url): it
+     * already includes the "/v1" prefix, so only the endpoint path is
+     * appended here. */
     char url[256];
-    snprintf(url, sizeof(url), "%s/v1/audio/transcriptions",
-             cfg->base_url ? cfg->base_url : "https://api.openai.com");
+    snprintf(url, sizeof(url), "%s/audio/transcriptions",
+             cfg->base_url && cfg->base_url[0] ? cfg->base_url : "https://api.openai.com/v1");
 
     char auth[512];
     snprintf(auth, sizeof(auth), "Bearer %s", cfg->api_key ? cfg->api_key : "");
