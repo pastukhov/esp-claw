@@ -14,6 +14,7 @@
 #include "claw_event.h"
 #include "claw_event_router.h"
 #include "claw_event_publisher.h"
+#include "claw_task.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -135,8 +136,8 @@ static const char *k_html =
     "<span class='muted' id='stGrip'>--</span>"
     "</div></div>"
     "<div class='muted' id='roverHint' style='display:none;margin-bottom:6px'>"
-    "Manual rover control unavailable on this build (movement now lives on an "
-    "MCP server, reachable only through the chat agent, not this panel)</div>"
+    "No rover base found on the network (mcp_discover found nothing "
+    "offering rover.* tools) — press STOP to retry</div>"
     "<div class='card' id='driveCtrls'>"
     "<div id='joyWrap'><canvas id='joy' width='180' height='180'></canvas></div>"
     "<div class='spd-row'><span class='muted'>Speed</span>"
@@ -146,20 +147,15 @@ static const char *k_html =
     "<button onmousedown=\"hold('rl')\" onmouseup='stopHold()' ontouchstart=\"hold('rl')\" ontouchend='stopHold()'>&#8634; Left</button>"
     "<button class='danger' onclick=\"cmd('stop')\">STOP</button>"
     "<button onmousedown=\"hold('rr')\" onmouseup='stopHold()' ontouchstart=\"hold('rr')\" ontouchend='stopHold()'>Right &#8635;</button>"
-    "</div>"
-    "<div class='row' style='margin-top:8px'>"
-    "<button onclick=\"cmd('open')\">Grip Open</button>"
-    "<button onclick=\"cmd('close')\">Grip Close</button>"
     "</div></div></div>"
     /* ── Vision ── */
     "<div class='panel' id='p1'>"
     "<div class='muted' id='visionHint' style='display:none;margin-bottom:6px'>"
-    "Manual vision control unavailable on this build (camera now lives on an "
-    "MCP server, reachable only through the chat agent, not this panel)</div>"
+    "No camera found on the network (mcp_discover found nothing offering "
+    "camera_* tools) — click Scan/Ping to retry</div>"
     "<div class='card' id='visionCtrls'>"
     "<div class='row'>"
     "<button onclick=\"vscan('SCAN')\">Scan</button>"
-    "<button onclick=\"vscan('OBJECTS')\">Objects</button>"
     "<button onclick=\"vscan('PING')\">Ping</button>"
     "<button onclick='vcap()'>Capture</button>"
     "</div>"
@@ -245,9 +241,12 @@ static const char *k_html =
     "setAvail('driveCtrls','roverHint',!!j.rover_available);"
     "setAvail('visionCtrls','visionHint',!!j.vision_available);"
     "}catch(e){}}"
+    /* Controls stay clickable either way: the first click is what triggers
+     * MCP discovery server-side, so 'unavailable' just dims for visual
+     * feedback and shows a hint instead of blocking input. */
     "function setAvail(ctrlsId,hintId,ok){"
     "const c=document.getElementById(ctrlsId),h=document.getElementById(hintId);"
-    "c.style.opacity=ok?'1':'.4';c.style.pointerEvents=ok?'auto':'none';"
+    "c.style.opacity=ok?'1':'.7';"
     "h.style.display=ok?'none':'block';}"
     /* vision */
     "async function vscan(c){const o=document.getElementById('vOut');o.textContent='scanning...';"
@@ -316,6 +315,213 @@ static const char *k_html =
 
 /* ── HTTP handlers ─────────────────────────────────────────────────── */
 
+/* ── MCP-backed rover/camera control for the manual web panel ─────────
+ * The drive/vision panels drive real hardware over MCP (mcp_discover /
+ * mcp_list_tools / mcp_call_tool — the same claw_cap capabilities the chat
+ * agent uses), instead of a direct claw_cap_call("rover_move", ...) that
+ * can never resolve locally. Each target (rover, camera) is discovered
+ * once and cached; a failed call invalidates the cache so the next click
+ * re-discovers (handles the device rebooting or changing IP). */
+typedef struct {
+    char server_url[128]; /* "http://<ip>:<port>", no endpoint path */
+    char endpoint[32];
+    bool valid;
+} mcp_target_t;
+
+static mcp_target_t s_rover_mcp  = {0};
+static mcp_target_t s_camera_mcp = {0};
+
+/** Does `name` (nul-terminated) start with `prefix`? */
+static bool str_has_prefix(const char *name, const char *prefix)
+{
+    return name && strncmp(name, prefix, strlen(prefix)) == 0;
+}
+
+/** True if mcp_list_tools on (server_url, endpoint) returns a tool whose
+ * name starts with tool_prefix (e.g. "rover." or "camera_"). */
+static bool mcp_server_has_tool_prefix(const char *server_url, const char *endpoint,
+                                       const char *tool_prefix)
+{
+    char input[256];
+    char output[1024] = {0};
+    snprintf(input, sizeof(input), "{\"server_url\":\"%s\",\"endpoint\":\"%s\"}",
+             server_url, endpoint);
+    if (claw_cap_call("mcp_list_tools", input, NULL, output, sizeof(output)) != ESP_OK) {
+        return false;
+    }
+    /* cap_mcp_list_execute() output: one "- name: description" line per tool. */
+    char *saveptr = NULL;
+    for (char *line = strtok_r(output, "\n", &saveptr); line; line = strtok_r(NULL, "\n", &saveptr)) {
+        if (line[0] == '-' && line[1] == ' ' && str_has_prefix(line + 2, tool_prefix)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Runs mcp_discover, then mcp_list_tools on each result, and caches the
+ * first server whose tools match tool_prefix into *target. */
+static bool mcp_ensure_target(mcp_target_t *target, const char *tool_prefix)
+{
+    if (target->valid) {
+        return true;
+    }
+
+    char discover_out[1536] = {0};
+    if (claw_cap_call("mcp_discover", "{}", NULL, discover_out, sizeof(discover_out)) != ESP_OK) {
+        return false;
+    }
+
+    /* cap_mcp_discover_execute() output: "\n\n"-separated blocks, each a
+     * run of "key=value" lines (instance/hostname/ip/port/endpoint/url). */
+    char *block_cursor = discover_out;
+    while (block_cursor && *block_cursor) {
+        char *block_end = strstr(block_cursor, "\n\n");
+        if (block_end) {
+            *block_end = '\0';
+        }
+
+        char ip[64] = {0};
+        char port[8] = {0};
+        char endpoint[32] = {0};
+        char *saveptr = NULL;
+        for (char *line = strtok_r(block_cursor, "\n", &saveptr); line;
+                line = strtok_r(NULL, "\n", &saveptr)) {
+            if (str_has_prefix(line, "ip=")) {
+                strlcpy(ip, line + 3, sizeof(ip));
+            } else if (str_has_prefix(line, "port=")) {
+                strlcpy(port, line + 5, sizeof(port));
+            } else if (str_has_prefix(line, "endpoint=")) {
+                strlcpy(endpoint, line + 9, sizeof(endpoint));
+            }
+        }
+
+        if (ip[0] && port[0] && endpoint[0]) {
+            char server_url[128];
+            snprintf(server_url, sizeof(server_url), "http://%s:%s", ip, port);
+            if (mcp_server_has_tool_prefix(server_url, endpoint, tool_prefix)) {
+                strlcpy(target->server_url, server_url, sizeof(target->server_url));
+                strlcpy(target->endpoint, endpoint, sizeof(target->endpoint));
+                target->valid = true;
+                return true;
+            }
+        }
+
+        block_cursor = block_end ? block_end + 2 : NULL;
+    }
+    return false;
+}
+
+/** Calls tool_name on target via mcp_call_tool (discovering/caching the
+ * target first if needed), writing the extracted result text into output.
+ * On failure, invalidates the cache so the next call re-discovers.
+ * Runs on the caller's own task/stack -- see mcp_call_tool() below, which
+ * is what h_cmd/h_vision actually call. */
+static esp_err_t mcp_call_tool_impl(mcp_target_t *target, const char *tool_prefix,
+                                    const char *tool_name, const char *arguments_json,
+                                    char *output, size_t output_size)
+{
+    if (!mcp_ensure_target(target, tool_prefix)) {
+        snprintf(output, output_size, "{\"ok\":false,\"error\":\"mcp_server_not_found\"}");
+        return ESP_FAIL;
+    }
+
+    char input[512];
+    snprintf(input, sizeof(input), "{\"server_url\":\"%s\",\"endpoint\":\"%s\",\"tool_name\":\"%s\",\"arguments\":%s}",
+             target->server_url, target->endpoint, tool_name,
+             (arguments_json && arguments_json[0]) ? arguments_json : "{}");
+
+    esp_err_t err = claw_cap_call("mcp_call_tool", input, NULL, output, output_size);
+    if (err != ESP_OK || strncmp(output, "Error:", 6) == 0) {
+        target->valid = false;
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+typedef struct {
+    mcp_target_t *target;
+    const char *tool_prefix;
+    const char *tool_name;
+    const char *arguments_json;
+    char *output;
+    size_t output_size;
+    esp_err_t result;
+} mcp_call_work_t;
+
+static void mcp_call_work_fn(void *arg)
+{
+    mcp_call_work_t *w = (mcp_call_work_t *)arg;
+    w->result = mcp_call_tool_impl(w->target, w->tool_prefix, w->tool_name,
+                                   w->arguments_json, w->output, w->output_size);
+}
+
+/** Runs work_fn(ctx) on a dedicated task with a generous PSRAM-backed stack
+ * and blocks until it finishes. The mcp_discover -> mcp_list_tools ->
+ * mcp_call_tool chain (nested HTTP client + mcp-c-sdk engine + cJSON,
+ * sometimes several round trips per call) needs far more stack than fits
+ * on httpd's own worker task -- bumping httpd's own stack to fit it made
+ * httpd_start() itself fail to allocate at boot (internal RAM is already
+ * tight from WiFi/voice/AFE by the time it starts), so the work is
+ * offloaded to its own task instead. CLAW_TASK_STACK_PREFER_PSRAM is safe
+ * here: unlike claw_core/claw_event_router, this call chain is pure
+ * network/JSON work and never touches flash mid-call. */
+typedef struct {
+    void (*fn)(void *ctx);
+    void *ctx;
+    SemaphoreHandle_t done;
+} mcp_worker_wrap_t;
+
+static void mcp_worker_trampoline(void *arg)
+{
+    mcp_worker_wrap_t *w = (mcp_worker_wrap_t *)arg;
+    w->fn(w->ctx);
+    xSemaphoreGive(w->done);
+    vTaskDelete(NULL);
+}
+
+static bool mcp_run_blocking(void (*work_fn)(void *ctx), void *ctx)
+{
+    SemaphoreHandle_t done = xSemaphoreCreateBinary();
+    if (!done) {
+        return false;
+    }
+
+    mcp_worker_wrap_t wrap = { .fn = work_fn, .ctx = ctx, .done = done };
+    TaskHandle_t task_handle = NULL;
+    BaseType_t created = claw_task_create(&(claw_task_config_t){
+                                              .name = "mcp_web_work",
+                                              .stack_size = 20480,
+                                              .priority = 5,
+                                              .core_id = tskNO_AFFINITY,
+                                              .stack_policy = CLAW_TASK_STACK_PREFER_PSRAM,
+                                          },
+                                          mcp_worker_trampoline, &wrap, &task_handle);
+    bool ok = false;
+    if (created == pdPASS) {
+        xSemaphoreTake(done, portMAX_DELAY);
+        ok = true;
+    }
+    vSemaphoreDelete(done);
+    return ok;
+}
+
+static esp_err_t mcp_call_tool(mcp_target_t *target, const char *tool_prefix,
+                               const char *tool_name, const char *arguments_json,
+                               char *output, size_t output_size)
+{
+    mcp_call_work_t w = {
+        .target = target, .tool_prefix = tool_prefix, .tool_name = tool_name,
+        .arguments_json = arguments_json, .output = output, .output_size = output_size,
+        .result = ESP_FAIL,
+    };
+    if (!mcp_run_blocking(mcp_call_work_fn, &w)) {
+        snprintf(output, output_size, "{\"ok\":false,\"error\":\"worker_task_failed\"}");
+        return ESP_FAIL;
+    }
+    return w.result;
+}
+
 static esp_err_t h_root(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
@@ -326,14 +532,13 @@ static esp_err_t h_status(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
     const char *ip = rover_s3_wifi_get_ip();
-    /* rover_move/unitv_scan are no longer registered locally, and won't be
-     * again: movement/camera now live behind cap_mcp_client's generic
-     * mcp_call_tool, which the chat agent can use but this direct-call
-     * panel cannot (there's no per-tool claw_cap registration to detect).
-     * These stay permanently false until this panel is rewritten to go
-     * through mcp_call_tool itself. */
-    bool rover_available = claw_cap_find("rover_move") != NULL;
-    bool vision_available = claw_cap_find("unitv_scan") != NULL;
+    /* Cheap in-memory check only -- does not trigger MCP discovery itself
+     * (this handler is polled every ~1.5s by the page). The cache is
+     * populated by the first /cmd or /vision call that needs it; until
+     * then the panel shows as unavailable even if a server is actually
+     * reachable. */
+    bool rover_available = s_rover_mcp.valid;
+    bool vision_available = s_camera_mcp.valid;
     char buf[320];
     int n = snprintf(buf, sizeof(buf),
                      "{\"state\":\"IDLE\",\"motion\":0,\"x\":0,\"y\":0,\"z\":0,"
@@ -352,47 +557,43 @@ static esp_err_t h_cmd(httpd_req_t *req)
     char action[48] = "stop";
     httpd_req_get_url_query_str(req, query, sizeof(query));
     httpd_query_key_value(query, "act", action, sizeof(action));
+    ESP_LOGI(TAG, "mcp diag: h_cmd entered act=%s", action);
 
-    char input[128];
-    char output[256] = {0};
+    /* rover.move/rover.turn on the wave_rover MCP server take normalized
+     * -1.0..1.0 floats (linear/angular/speed), not raw percents. */
+    char args[128];
+    char output[512] = {0};
+    bool ok = false;
 
     if (strcmp(action, "stop") == 0) {
-        snprintf(input, sizeof(input), "{}");
-        claw_cap_call("rover_stop", input, NULL, output, sizeof(output));
-    } else if (strcmp(action, "open") == 0) {
-        snprintf(input, sizeof(input), "{}");
-        claw_cap_call("rover_open_gripper", input, NULL, output, sizeof(output));
-    } else if (strcmp(action, "close") == 0) {
-        snprintf(input, sizeof(input), "{}");
-        claw_cap_call("rover_close_gripper", input, NULL, output, sizeof(output));
-    } else if (strcmp(action, "rotate_left") == 0) {
+        ok = (mcp_call_tool(&s_rover_mcp, "rover.", "rover.stop", NULL,
+                            output, sizeof(output)) == ESP_OK);
+    } else if (strcmp(action, "rotate_left") == 0 || strcmp(action, "rotate_right") == 0) {
         char sval[8] = "30"; httpd_query_key_value(query, "s", sval, sizeof(sval));
-        snprintf(input, sizeof(input),
-                 "{\"direction\":\"left\",\"angle_deg\":15,\"speed_percent\":%d}", atoi(sval));
-        claw_cap_call("rover_turn", input, NULL, output, sizeof(output));
-    } else if (strcmp(action, "rotate_right") == 0) {
-        char sval[8] = "30"; httpd_query_key_value(query, "s", sval, sizeof(sval));
-        snprintf(input, sizeof(input),
-                 "{\"direction\":\"right\",\"angle_deg\":15,\"speed_percent\":%d}", atoi(sval));
-        claw_cap_call("rover_turn", input, NULL, output, sizeof(output));
+        snprintf(args, sizeof(args), "{\"direction\":\"%s\",\"speed\":%.3f,\"duration_ms\":300}",
+                 strcmp(action, "rotate_left") == 0 ? "left" : "right",
+                 atoi(sval) / 100.0f);
+        ok = (mcp_call_tool(&s_rover_mcp, "rover.", "rover.turn", args,
+                            output, sizeof(output)) == ESP_OK);
     } else if (strcmp(action, "move") == 0) {
-        char xv[8] = "0", yv[8] = "0", zv[8] = "0";
+        char xv[8] = "0", yv[8] = "0";
         httpd_query_key_value(query, "x", xv, sizeof(xv));
         httpd_query_key_value(query, "y", yv, sizeof(yv));
-        httpd_query_key_value(query, "z", zv, sizeof(zv));
-        int x = atoi(xv), y = atoi(yv), z = atoi(zv);
-        if (x == 0 && y == 0 && z == 0) {
-            claw_cap_call("rover_stop", "{}", NULL, output, sizeof(output));
+        int x = atoi(xv), y = atoi(yv);
+        if (x == 0 && y == 0) {
+            ok = (mcp_call_tool(&s_rover_mcp, "rover.", "rover.stop", NULL,
+                                output, sizeof(output)) == ESP_OK);
         } else {
-            snprintf(input, sizeof(input),
-                     "{\"x\":%d,\"y\":%d,\"z\":%d,\"duration_ms\":200}", x, y, z);
-            claw_cap_call("rover_move", input, NULL, output, sizeof(output));
+            snprintf(args, sizeof(args), "{\"linear\":%.3f,\"angular\":%.3f,\"duration_ms\":200}",
+                     y / 100.0f, x / 100.0f);
+            ok = (mcp_call_tool(&s_rover_mcp, "rover.", "rover.move", args,
+                                output, sizeof(output)) == ESP_OK);
         }
     }
 
     httpd_resp_set_type(req, "application/json");
     char resp[96];
-    snprintf(resp, sizeof(resp), "{\"ok\":true,\"act\":\"%.48s\"}", action);
+    snprintf(resp, sizeof(resp), "{\"ok\":%s,\"act\":\"%.40s\"}", ok ? "true" : "false", action);
     return httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
 }
 
@@ -400,37 +601,43 @@ static esp_err_t h_vision(httpd_req_t *req)
 {
     char query[96] = {0};
     char cmd[16] = "SCAN";
-    char quality_str[8] = "75";
     httpd_req_get_url_query_str(req, query, sizeof(query));
     httpd_query_key_value(query, "cmd", cmd, sizeof(cmd));
-    httpd_query_key_value(query, "quality", quality_str, sizeof(quality_str));
 
     if (strcmp(cmd, "CAPTURE") == 0) {
-        char input[64];
-        snprintf(input, sizeof(input), "{\"quality\":%d}", atoi(quality_str));
-        char *output = NULL;
-        esp_err_t err = claw_cap_call_from_core("unitv_capture", input, NULL, &output, NULL);
-        if (err != ESP_OK || !output) {
+        char output[512] = {0};
+        if (mcp_call_tool(&s_camera_mcp, "camera_", "camera_capture", NULL,
+                          output, sizeof(output)) != ESP_OK) {
             httpd_resp_set_status(req, "504 Gateway Timeout");
             httpd_resp_set_type(req, "application/json");
-            if (output) free(output);
             return httpd_resp_send(req, "{\"ok\":false,\"error\":\"capture failed\"}", HTTPD_RESP_USE_STRLEN);
         }
-        /* output is JSON with base64 image — return as JSON */
-        httpd_resp_set_type(req, "application/json");
-        esp_err_t send_err = httpd_resp_send(req, output, HTTPD_RESP_USE_STRLEN);
-        free(output);
+        /* camera_capture's result is {"ok":true,"url":"http://<cam-ip>/capture.jpg",...}
+         * -- the JPEG itself lives on the camera device, not routed through us.
+         * Redirect the browser straight to it. */
+        cJSON *result = cJSON_Parse(output);
+        const char *url = result ? cJSON_GetStringValue(cJSON_GetObjectItem(result, "url")) : NULL;
+        if (!url || !url[0]) {
+            cJSON_Delete(result);
+            httpd_resp_set_status(req, "502 Bad Gateway");
+            httpd_resp_set_type(req, "application/json");
+            return httpd_resp_send(req, "{\"ok\":false,\"error\":\"no_capture_url\"}", HTTPD_RESP_USE_STRLEN);
+        }
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", url);
+        esp_err_t send_err = httpd_resp_send(req, NULL, 0);
+        cJSON_Delete(result);
         return send_err;
     }
 
-    /* SCAN / OBJECTS / WHO / PING */
-    char input[64] = "{}";
-    char output[1024] = {0};
-    claw_cap_call("unitv_scan", input, NULL, output, sizeof(output));
-
+    /* SCAN / OBJECTS / WHO / PING: this camera only exposes camera_status
+     * (no object-detection tool like the old cap_unitv had), so every
+     * button in that group just checks in with the camera. */
+    char output[512] = {0};
     httpd_resp_set_type(req, "application/json");
-    if (!output[0]) {
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"timeout\"}", HTTPD_RESP_USE_STRLEN);
+    if (mcp_call_tool(&s_camera_mcp, "camera_", "camera_status", NULL,
+                      output, sizeof(output)) != ESP_OK) {
+        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"camera_unavailable\"}", HTTPD_RESP_USE_STRLEN);
     }
     return httpd_resp_send(req, output, HTTPD_RESP_USE_STRLEN);
 }
@@ -806,6 +1013,12 @@ esp_err_t rover_s3_httpd_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port      = 80;
     cfg.max_uri_handlers = 12;
+    /* Back to the original 8KB: /cmd and /vision's MCP work (discover ->
+     * list_tools -> call_tool) runs on its own dedicated PSRAM-stacked
+     * task (see mcp_run_blocking()), not on httpd's own worker stack.
+     * Bumping this to 24KB to fit that chain directly was tried first and
+     * reverted: httpd_start() itself failed to allocate at boot (internal
+     * RAM is already tight from WiFi/voice/AFE by the time it starts). */
     cfg.stack_size       = 8192;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
 
