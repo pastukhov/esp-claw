@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "esp_http_client.h"
+#include "esp_mcp_engine.h"
 #include "esp_mcp_mgr.h"
 
 #include "cap_mcp_client_priv.h"
@@ -164,27 +165,43 @@ static esp_err_t cap_mcp_init_remote_session(esp_mcp_mgr_handle_t mgr, const cha
 
 static esp_err_t cap_mcp_mgr_create(const char *server_url,
                                     const char *endpoint,
-                                    esp_mcp_mgr_handle_t *mgr_out)
+                                    esp_mcp_mgr_handle_t *mgr_out,
+                                    esp_mcp_t **engine_out)
 {
     esp_err_t err;
+    esp_mcp_t *engine = NULL;
     esp_http_client_config_t http_config = {
         .url = server_url,
         .timeout_ms = CAP_MCP_HTTP_TIMEOUT_MS,
         .buffer_size = 4096,
         .keep_alive_enable = true,
     };
-    esp_mcp_mgr_config_t mgr_config = {
-        .transport = esp_mcp_transport_http_client,
-        .config = &http_config,
-    };
 
-    if (!server_url || !server_url[0] || !endpoint || !endpoint[0] || !mgr_out) {
+    if (!server_url || !server_url[0] || !endpoint || !endpoint[0] || !mgr_out || !engine_out) {
         return ESP_ERR_INVALID_ARG;
     }
     *mgr_out = 0;
+    *engine_out = NULL;
+
+    /* esp_mcp_mgr_* handles protocol/transport plumbing, but every request
+     * it posts reads back an esp_mcp_t engine instance from its config
+     * (see esp_mcp_mgr_post_req()'s "MCP instance not configured" check) --
+     * required for a client-only role too, not just when serving local
+     * tools. Without this, every outbound request fails immediately. */
+    err = esp_mcp_create(&engine);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    esp_mcp_mgr_config_t mgr_config = {
+        .transport = esp_mcp_transport_http_client,
+        .config = &http_config,
+        .instance = engine,
+    };
 
     err = esp_mcp_mgr_init(mgr_config, mgr_out);
     if (err != ESP_OK) {
+        esp_mcp_destroy(engine);
         return err;
     }
 
@@ -192,6 +209,7 @@ static esp_err_t cap_mcp_mgr_create(const char *server_url,
     if (err != ESP_OK) {
         esp_mcp_mgr_deinit(*mgr_out);
         *mgr_out = 0;
+        esp_mcp_destroy(engine);
         return err;
     }
 
@@ -200,6 +218,7 @@ static esp_err_t cap_mcp_mgr_create(const char *server_url,
         esp_mcp_mgr_stop(*mgr_out);
         esp_mcp_mgr_deinit(*mgr_out);
         *mgr_out = 0;
+        esp_mcp_destroy(engine);
         return err;
     }
 
@@ -208,15 +227,22 @@ static esp_err_t cap_mcp_mgr_create(const char *server_url,
         esp_mcp_mgr_stop(*mgr_out);
         esp_mcp_mgr_deinit(*mgr_out);
         *mgr_out = 0;
+        esp_mcp_destroy(engine);
+        return err;
     }
-    return err;
+
+    *engine_out = engine;
+    return ESP_OK;
 }
 
-static void cap_mcp_mgr_destroy(esp_mcp_mgr_handle_t mgr)
+static void cap_mcp_mgr_destroy(esp_mcp_mgr_handle_t mgr, esp_mcp_t *engine)
 {
     if (mgr != 0) {
         esp_mcp_mgr_stop(mgr);
         esp_mcp_mgr_deinit(mgr);
+    }
+    if (engine) {
+        esp_mcp_destroy(engine);
     }
 }
 
@@ -245,6 +271,7 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
     char endpoint_buf[64];
     char cursor_buf[128];
     esp_mcp_mgr_handle_t mgr = 0;
+    esp_mcp_t *engine = NULL;
     cap_mcp_response_ctx_t ctx = {0};
     esp_mcp_mgr_req_t req = {0};
     esp_err_t err;
@@ -268,7 +295,7 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
         return err;
     }
 
-    err = cap_mcp_mgr_create(server_url_buf, endpoint_buf, &mgr);
+    err = cap_mcp_mgr_create(server_url_buf, endpoint_buf, &mgr, &engine);
     if (err != ESP_OK) {
         return err;
     }
@@ -280,7 +307,7 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
     req.u.list.limit = -1;
 
     err = esp_mcp_mgr_post_tools_list(mgr, &req);
-    cap_mcp_mgr_destroy(mgr);
+    cap_mcp_mgr_destroy(mgr, engine);
     if (err == ESP_OK) {
         err = cap_mcp_capture_result(&ctx, result_out);
     }
@@ -296,6 +323,7 @@ esp_err_t cap_mcp_call_remote_tool(const char *input_json, cJSON **result_out)
     cJSON *arguments = NULL;
     char *arguments_json = NULL;
     esp_mcp_mgr_handle_t mgr = 0;
+    esp_mcp_t *engine = NULL;
     cap_mcp_response_ctx_t ctx = {0};
     esp_mcp_mgr_req_t req = {0};
     esp_err_t err;
@@ -326,7 +354,7 @@ esp_err_t cap_mcp_call_remote_tool(const char *input_json, cJSON **result_out)
         return ESP_ERR_NO_MEM;
     }
 
-    err = cap_mcp_mgr_create(server_url_buf, endpoint_buf, &mgr);
+    err = cap_mcp_mgr_create(server_url_buf, endpoint_buf, &mgr, &engine);
     if (err != ESP_OK) {
         cJSON_free(arguments_json);
         return err;
@@ -339,7 +367,7 @@ esp_err_t cap_mcp_call_remote_tool(const char *input_json, cJSON **result_out)
     req.u.call.args_json = arguments_json;
 
     err = esp_mcp_mgr_post_tools_call(mgr, &req);
-    cap_mcp_mgr_destroy(mgr);
+    cap_mcp_mgr_destroy(mgr, engine);
     cJSON_free(arguments_json);
     if (err == ESP_OK) {
         err = cap_mcp_capture_result(&ctx, result_out);
