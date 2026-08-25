@@ -135,7 +135,8 @@ static const char *k_html =
     "<span class='muted' id='stGrip'>--</span>"
     "</div></div>"
     "<div class='muted' id='roverHint' style='display:none;margin-bottom:6px'>"
-    "Rover control unavailable (waiting for MCP tools)</div>"
+    "Manual rover control unavailable on this build (movement now lives on an "
+    "MCP server, reachable only through the chat agent, not this panel)</div>"
     "<div class='card' id='driveCtrls'>"
     "<div id='joyWrap'><canvas id='joy' width='180' height='180'></canvas></div>"
     "<div class='spd-row'><span class='muted'>Speed</span>"
@@ -153,7 +154,8 @@ static const char *k_html =
     /* ── Vision ── */
     "<div class='panel' id='p1'>"
     "<div class='muted' id='visionHint' style='display:none;margin-bottom:6px'>"
-    "Vision unavailable (waiting for MCP tools)</div>"
+    "Manual vision control unavailable on this build (camera now lives on an "
+    "MCP server, reachable only through the chat agent, not this panel)</div>"
     "<div class='card' id='visionCtrls'>"
     "<div class='row'>"
     "<button onclick=\"vscan('SCAN')\">Scan</button>"
@@ -324,9 +326,12 @@ static esp_err_t h_status(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
     const char *ip = rover_s3_wifi_get_ip();
-    /* rover_move/unitv_scan are no longer registered locally; the drive/vision
-     * panels stay in the UI but go inactive until an MCP-provided capability
-     * registers the same tool ids under claw_cap. */
+    /* rover_move/unitv_scan are no longer registered locally, and won't be
+     * again: movement/camera now live behind cap_mcp_client's generic
+     * mcp_call_tool, which the chat agent can use but this direct-call
+     * panel cannot (there's no per-tool claw_cap registration to detect).
+     * These stay permanently false until this panel is rewritten to go
+     * through mcp_call_tool itself. */
     bool rover_available = claw_cap_find("rover_move") != NULL;
     bool vision_available = claw_cap_find("unitv_scan") != NULL;
     char buf[320];

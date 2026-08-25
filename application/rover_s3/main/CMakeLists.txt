@@ -15,6 +15,7 @@ idf_component_register(
         captive_dns
         board_support
         cap_voice
+        cap_mcp_client
         claw_cap claw_event_router
         app_claw
 )

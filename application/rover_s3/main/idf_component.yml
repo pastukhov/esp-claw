@@ -1,6 +1,8 @@
 dependencies:
   cap_voice:
     path: ../../../components/claw_capabilities/cap_voice
+  cap_mcp_client:
+    path: ../../../components/claw_capabilities/cap_mcp_client
   claw_cap:
     path: ../../../components/claw_modules/claw_cap
   claw_event_router:

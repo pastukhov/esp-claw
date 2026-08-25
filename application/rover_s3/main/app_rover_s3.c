@@ -10,6 +10,7 @@
 
 #include "app_capabilities.h"
 #include "app_claw.h"
+#include "cap_mcp_client.h"
 #include "cap_voice.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -25,8 +26,14 @@ static const char *TAG = "app_rover_s3";
 #define ROVER_S3_SYSTEM_PROMPT \
     "You are AI Rover S3, a mecanum robot with a gripper, a camera, and a speaker. " \
     "Answer briefly in the user's language. " \
-    "Driving, gripper, and camera controls are operated manually from the device's " \
-    "web UI, not by you; you do not currently have movement or vision tools. " \
+    "Movement, gripper, and camera are not built-in tools: they live on a separate " \
+    "MCP server reachable over the local network. To use them: call mcp_discover to " \
+    "find MCP servers advertised via mDNS (each result gives a server_url), call " \
+    "mcp_list_tools with that server_url to see what it offers, then call " \
+    "mcp_call_tool with server_url, tool_name, and arguments to actually act. If no " \
+    "server is discovered, tell the user the rover base isn't reachable rather than " \
+    "guessing at tool names. The device's own web UI also has a manual drive/vision " \
+    "panel independent of you. " \
     "Use voice_say to speak responses aloud when the user communicates via voice."
 
 rover_s3_settings_t g_settings;
@@ -104,6 +111,14 @@ static esp_err_t app_cap_register_voice(const app_claw_config_t *config,
     return cap_voice_register_group();
 }
 
+static esp_err_t app_cap_register_mcp(const app_claw_config_t *config,
+                                      const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_mcp_client_register_group();
+}
+
 static esp_err_t register_rover_s3_capabilities(void)
 {
     ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
@@ -114,6 +129,17 @@ static esp_err_t register_rover_s3_capabilities(void)
                             .reg = app_cap_register_voice,
                         }),
                         TAG, "register external group cap_voice");
+    /* cap_mcp_client is config-free: mcp_call_tool/mcp_list_tools take
+     * server_url as a call argument, and mcp_discover finds servers via
+     * mDNS, so there's no "prepare" hardware/config step, unlike cap_voice. */
+    ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
+                            .group_id = "cap_mcp_client",
+                            .display_name = "MCP Client",
+                            .llm_visible_by_default = true,
+                            .prepare = NULL,
+                            .reg = app_cap_register_mcp,
+                        }),
+                        TAG, "register external group cap_mcp_client");
     return ESP_OK;
 }
 
@@ -140,7 +166,7 @@ static void build_app_claw_config(const rover_s3_settings_t *s, app_claw_config_
     /* Empty enabled_cap_groups = enable every compiled-in group (Kconfig
      * already trims the built-in set to what rover_s3 needs). */
     out->enabled_cap_groups[0] = '\0';
-    strlcpy(out->llm_visible_cap_groups, "cap_skill,cap_voice",
+    strlcpy(out->llm_visible_cap_groups, "cap_skill,cap_voice,cap_mcp_client",
            sizeof(out->llm_visible_cap_groups));
     out->system_prompt_override = ROVER_S3_SYSTEM_PROMPT;
 }
