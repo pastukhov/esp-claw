@@ -13,8 +13,26 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # bus structs land in PSRAM and alloc/free traversal of their TLSF metadata
 # wedges (IWDT). Structs are tiny, so internal RAM cost is negligible.
 CONFIG_I2C_ISR_IRAM_SAFE=y
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+# NOTE: the flash-cache-disable crash (esp_task_stack_is_sane_cache_disabled())
+# is fixed per-task via CLAW_TASK_STACK_INTERNAL_ONLY at the three call sites
+# that actually perform flash/FAT reads (claw_event_router.c, claw_core.c,
+# claw_memory_session.c), not via this Kconfig option. A global
+# CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n was tried first and reverted:
+# it forced every CLAW_TASK_STACK_PREFER_PSRAM task into internal RAM
+# (including cap_im_tg and cap_system, which don't need it), leaving too
+# little internal/DMA-capable RAM for esp-aes's hardware-crypto work buffer
+# during concurrent HTTPS (Telegram polling + an LLM call at the same time
+# failed with "esp-aes: Failed to allocate memory"). See the plan doc's
+# 2026-08-23 update for the full story.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=n
+# mbedTLS's per-connection I/O buffers (16KB in + 16KB out = 32KB, since
+# DYNAMIC_BUFFER is off) default to internal-RAM-only allocation, which
+# starves internal RAM when task stacks also live there. These are heap
+# buffers, not a task stack, so PSRAM is safe here: nothing reads them
+# during the flash-cache-disabled window CLAW_TASK_STACK_INTERNAL_ONLY
+# guards against.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
 CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=16384
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
@@ -74,3 +92,17 @@ CONFIG_APP_CLAW_CAP_HTTP_REQUEST=n
 CONFIG_APP_CLAW_CAP_WEB_SEARCH=n
 CONFIG_APP_CLAW_CAP_ROUTER_MGR=n
 CONFIG_APP_CLAW_CAP_AGENT_MGR=n
+# cap_voice's wake-word pipeline (cap_voice_pipeline.c) reads whatever WakeNet
+# model esp-sr packs into the `model` partition (512 KB) — without this,
+# movemodel.py reports "No speech models loaded". No Russian WakeNet exists in
+# ESP-SR (only CN/EN/JA/FR; RU is "planned" per Espressif's TTS Pipeline V3 as
+# of 2026-08); a custom on-device Russian wake word needs a separate TFLite
+# Micro model (see docs/superpowers/plans/2026-05-21-rover-s3.md). "Jarvis"
+# picked as a rover-fitting placeholder wake word in the meantime.
+#
+# No MultiNet: cap_voice_pipeline.c's English MultiNet models (mn6_en alone is
+# 3.7 MB) can't fit the 512 KB partition, and MultiNet only supports CN/EN
+# anyway — useless for Russian commands regardless of size. All recognized
+# speech goes through Whisper (cap_voice_whisper.c already hardcodes
+# language="ru"), not the local fixed English command list.
+CONFIG_SR_WN_WN9_JARVIS_TTS=y

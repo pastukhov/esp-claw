@@ -45,14 +45,15 @@
     "consume_on_match": true,
     "match": {
       "event_type": "out_message",
-      "target_channel": "web"
+      "channel": "web"
     },
     "actions": [
       {
         "type": "send_message",
         "input": {
           "channel": "web",
-          "chat_id": "web"
+          "chat_id": "web",
+          "message": "{{event.text}}"
         }
       }
     ]
@@ -64,15 +65,15 @@
     "consume_on_match": true,
     "match": {
       "event_type": "out_message",
-      "target_channel": "telegram"
+      "channel": "telegram"
     },
     "actions": [
       {
         "type": "call_cap",
         "cap": "tg_send_message",
         "input": {
-          "chat_id": "{{event.target_chat_id}}",
-          "text": "{{event.text}}"
+          "chat_id": "{{event.chat_id}}",
+          "message": "{{event.text}}"
         }
       }
     ]

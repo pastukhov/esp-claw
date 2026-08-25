@@ -70,8 +70,16 @@
 #define CONFIG_ROVER_S3_TTS_BASE_URL ""
 #endif
 
+#ifndef CONFIG_ROVER_S3_WHISPER_MODEL
+#define CONFIG_ROVER_S3_WHISPER_MODEL "whisper-1"
+#endif
+
 #ifndef CONFIG_ROVER_S3_TTS_VOICE
 #define CONFIG_ROVER_S3_TTS_VOICE "alloy"
+#endif
+
+#ifndef CONFIG_ROVER_S3_TTS_MODEL
+#define CONFIG_ROVER_S3_TTS_MODEL "tts-1"
 #endif
 
 #ifndef CONFIG_ROVER_S3_WAKE_SENSITIVITY
@@ -120,9 +128,11 @@ static void load_defaults(rover_s3_settings_t *s)
     copy_str(s->time_timezone, sizeof(s->time_timezone), CONFIG_ROVER_S3_TIME_TIMEZONE);
     copy_str(s->whisper_api_key, sizeof(s->whisper_api_key), CONFIG_ROVER_S3_WHISPER_API_KEY);
     copy_str(s->whisper_base_url, sizeof(s->whisper_base_url), CONFIG_ROVER_S3_WHISPER_BASE_URL);
+    copy_str(s->whisper_model, sizeof(s->whisper_model), CONFIG_ROVER_S3_WHISPER_MODEL);
     copy_str(s->tts_api_key, sizeof(s->tts_api_key), CONFIG_ROVER_S3_TTS_API_KEY);
     copy_str(s->tts_base_url, sizeof(s->tts_base_url), CONFIG_ROVER_S3_TTS_BASE_URL);
     copy_str(s->tts_voice, sizeof(s->tts_voice), CONFIG_ROVER_S3_TTS_VOICE);
+    copy_str(s->tts_model, sizeof(s->tts_model), CONFIG_ROVER_S3_TTS_MODEL);
     copy_str(s->wake_sensitivity, sizeof(s->wake_sensitivity), CONFIG_ROVER_S3_WAKE_SENSITIVITY);
     copy_str(s->multinet_threshold, sizeof(s->multinet_threshold), CONFIG_ROVER_S3_MULTINET_THRESHOLD);
     copy_str(s->voice_enabled, sizeof(s->voice_enabled), CONFIG_ROVER_S3_VOICE_ENABLED);
@@ -151,8 +161,14 @@ static void normalize_defaults(rover_s3_settings_t *s)
     if (!s->time_timezone[0]) {
         copy_str(s->time_timezone, sizeof(s->time_timezone), CONFIG_ROVER_S3_TIME_TIMEZONE);
     }
+    if (!s->whisper_model[0]) {
+        copy_str(s->whisper_model, sizeof(s->whisper_model), CONFIG_ROVER_S3_WHISPER_MODEL);
+    }
     if (!s->tts_voice[0]) {
         copy_str(s->tts_voice, sizeof(s->tts_voice), CONFIG_ROVER_S3_TTS_VOICE);
+    }
+    if (!s->tts_model[0]) {
+        copy_str(s->tts_model, sizeof(s->tts_model), CONFIG_ROVER_S3_TTS_MODEL);
     }
     if (!s->wake_sensitivity[0]) {
         copy_str(s->wake_sensitivity, sizeof(s->wake_sensitivity), CONFIG_ROVER_S3_WAKE_SENSITIVITY);
@@ -205,9 +221,11 @@ esp_err_t rover_s3_settings_load(rover_s3_settings_t *s)
         {"time_timezone", s->time_timezone, sizeof(s->time_timezone)},
         {"whisper_api_key", s->whisper_api_key, sizeof(s->whisper_api_key)},
         {"whisper_base", s->whisper_base_url, sizeof(s->whisper_base_url)},
+        {"whisper_model", s->whisper_model, sizeof(s->whisper_model)},
         {"tts_api_key", s->tts_api_key, sizeof(s->tts_api_key)},
         {"tts_base_url", s->tts_base_url, sizeof(s->tts_base_url)},
         {"tts_voice", s->tts_voice, sizeof(s->tts_voice)},
+        {"tts_model", s->tts_model, sizeof(s->tts_model)},
         {"wake_sens", s->wake_sensitivity, sizeof(s->wake_sensitivity)},
         {"mn_thresh", s->multinet_threshold, sizeof(s->multinet_threshold)},
         {"voice_enabled", s->voice_enabled, sizeof(s->voice_enabled)},
@@ -254,9 +272,11 @@ esp_err_t rover_s3_settings_save(const rover_s3_settings_t *s)
         {"time_timezone", s->time_timezone},
         {"whisper_api_key", s->whisper_api_key},
         {"whisper_base", s->whisper_base_url},
+        {"whisper_model", s->whisper_model},
         {"tts_api_key", s->tts_api_key},
         {"tts_base_url", s->tts_base_url},
         {"tts_voice", s->tts_voice},
+        {"tts_model", s->tts_model},
         {"wake_sens", s->wake_sensitivity},
         {"mn_thresh", s->multinet_threshold},
         {"voice_enabled", s->voice_enabled},

@@ -152,13 +152,18 @@ esp_err_t cap_voice_audio_deinit(void)
 
 esp_err_t cap_voice_audio_read(int16_t *buf, size_t samples, size_t *out_read)
 {
-    int bytes = esp_codec_dev_read(s_mic_dev, buf,
-                                    (int)(samples * sizeof(int16_t)));
-    if (bytes < 0) {
+    /* esp_codec_dev_read() returns a status code (ESP_CODEC_DEV_OK on
+     * success), not a byte count — it's a blocking read that either fills
+     * the full requested length or fails. Treating the return value as a
+     * byte count (as this used to) makes every successful read look like a
+     * 0-byte read, so the caller never sees any mic data even though the
+     * hardware capture itself works fine. */
+    int ret = esp_codec_dev_read(s_mic_dev, buf, (int)(samples * sizeof(int16_t)));
+    if (ret != ESP_CODEC_DEV_OK) {
         return ESP_FAIL;
     }
     if (out_read) {
-        *out_read = (size_t)bytes / sizeof(int16_t);
+        *out_read = samples;
     }
     return ESP_OK;
 }
@@ -171,12 +176,25 @@ esp_err_t cap_voice_audio_play(const int16_t *buf, size_t samples)
         .bits_per_sample = CAP_VOICE_BITS,
     };
 
+    /* mic and speaker share one I2S peripheral (single clock generator), so
+     * the mic's 16kHz RX must be closed before the speaker's 24kHz TX can
+     * open — otherwise esp_codec_dev/I2S_IF rejects the rate change
+     * ("playback conflict sample_rate 24000 with peer mode sample_rate
+     * 16000") and no audio is actually written. */
+    esp_codec_dev_close(s_mic_dev);
     esp_codec_dev_close(s_spk_dev);
     esp_err_t err = esp_codec_dev_open(s_spk_dev, &fs);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "spk open for playback failed: %s", esp_err_to_name(err));
+        fs.sample_rate = CAP_VOICE_SAMPLE_RATE_REC;
+        esp_codec_dev_open(s_mic_dev, &fs);
         return err;
     }
+
+    /* esp_codec_dev's output volume defaults to 0 (-96dB, i.e. silent) and is
+     * never set anywhere else; without this, esp_codec_dev_write() succeeds
+     * and I2S transmits real data, but nothing audible reaches the speaker. */
+    esp_codec_dev_set_out_vol(s_spk_dev, 80);
 
     int written = esp_codec_dev_write(s_spk_dev, (void *)buf,
                                        (int)(samples * sizeof(int16_t)));

@@ -340,13 +340,16 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
         }
     }
     ESP_LOGI(TAG, "POST %s body_len=%u timeout_ms=%" PRIu32
-             " auth=%s api_key_len=%u key_prefix_ok=%d free_heap=%u largest_block=%u",
+             " auth=%s api_key_len=%u key_prefix_ok=%d free_heap=%u largest_block=%u"
+             " free_internal=%u largest_internal_dma=%u",
              request->url, (unsigned)body_len, request->timeout_ms,
              request->auth_type ? request->auth_type : "(null)",
              (unsigned)api_key_len,
              request->api_key && strncmp(request->api_key, "sk-or-", 6) == 0,
              (unsigned)esp_get_free_heap_size(),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
     esp_http_client_set_post_field(client, sanitized_body, (int)strlen(sanitized_body));
 
     err = esp_http_client_perform(client);

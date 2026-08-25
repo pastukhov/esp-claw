@@ -42,7 +42,7 @@ esp_err_t cap_voice_tts_speak(const cap_voice_tts_config_t *cfg,
                                const char *text)
 {
     cJSON *body = cJSON_CreateObject();
-    cJSON_AddStringToObject(body, "model", "tts-1");
+    cJSON_AddStringToObject(body, "model", cfg->model && cfg->model[0] ? cfg->model : "");
     cJSON_AddStringToObject(body, "input", text);
     cJSON_AddStringToObject(body, "voice",
         cfg->voice ? cfg->voice : "alloy");
@@ -51,9 +51,12 @@ esp_err_t cap_voice_tts_speak(const cap_voice_tts_config_t *cfg,
     cJSON_Delete(body);
     if (!body_str) return ESP_ERR_NO_MEM;
 
+    /* base_url follows this project's convention (matches llm_base_url): it
+     * already includes the "/v1" prefix, so only the endpoint path is
+     * appended here. */
     char url[256];
-    snprintf(url, sizeof(url), "%s/v1/audio/speech",
-             cfg->base_url ? cfg->base_url : "https://api.openai.com");
+    snprintf(url, sizeof(url), "%s/audio/speech",
+             cfg->base_url && cfg->base_url[0] ? cfg->base_url : "https://api.openai.com/v1");
 
     char auth[512];
     snprintf(auth, sizeof(auth), "Bearer %s", cfg->api_key ? cfg->api_key : "");
@@ -82,6 +85,9 @@ esp_err_t cap_voice_tts_speak(const cap_voice_tts_config_t *cfg,
     esp_err_t err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
     ESP_LOGI(TAG, "TTS HTTP status=%d pcm_bytes=%u", status, (unsigned)buf.len);
+    if (status != 200 && buf.len > 0) {
+        ESP_LOGW(TAG, "TTS error body: %.*s", (int)buf.len, (const char *)buf.data);
+    }
     esp_http_client_cleanup(client);
     free(body_str);
 

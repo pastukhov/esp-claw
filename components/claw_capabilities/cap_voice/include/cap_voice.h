@@ -17,9 +17,11 @@ typedef void (*cap_voice_ui_cb_t)(cap_voice_ui_state_t state, void *ctx);
 typedef struct {
     const char *whisper_api_key;  /* NULL -> use LLM key from claw_core config */
     const char *whisper_base_url; /* NULL -> use llm_base_url */
+    const char *whisper_model;    /* transcription model name, e.g. "whisper-1" */
     const char *tts_api_key;
     const char *tts_base_url;
     const char *tts_voice;        /* "alloy", "nova", etc. */
+    const char *tts_model;        /* TTS model name, e.g. "tts-1" */
     float wake_sensitivity;       /* 0.0-1.0, default 0.7 */
     float multinet_threshold;     /* 0.0-1.0, default 0.85 */
     cap_voice_ui_cb_t on_ui_state; /* optional: called on voice state change */

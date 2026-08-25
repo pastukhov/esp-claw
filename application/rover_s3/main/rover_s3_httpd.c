@@ -18,6 +18,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -133,7 +134,9 @@ static const char *k_html =
     "<span class='muted' id='stMotion'>--</span>"
     "<span class='muted' id='stGrip'>--</span>"
     "</div></div>"
-    "<div class='card'>"
+    "<div class='muted' id='roverHint' style='display:none;margin-bottom:6px'>"
+    "Rover control unavailable (waiting for MCP tools)</div>"
+    "<div class='card' id='driveCtrls'>"
     "<div id='joyWrap'><canvas id='joy' width='180' height='180'></canvas></div>"
     "<div class='spd-row'><span class='muted'>Speed</span>"
     "<input type='range' id='spdSlider' min='10' max='100' value='80'>"
@@ -149,7 +152,9 @@ static const char *k_html =
     "</div></div></div>"
     /* ── Vision ── */
     "<div class='panel' id='p1'>"
-    "<div class='card'>"
+    "<div class='muted' id='visionHint' style='display:none;margin-bottom:6px'>"
+    "Vision unavailable (waiting for MCP tools)</div>"
+    "<div class='card' id='visionCtrls'>"
     "<div class='row'>"
     "<button onclick=\"vscan('SCAN')\">Scan</button>"
     "<button onclick=\"vscan('OBJECTS')\">Objects</button>"
@@ -174,7 +179,12 @@ static const char *k_html =
     "<div class='panel' id='p3'>"
     "<div class='card'>"
     "<form id='cfgForm' method='POST' action='/config' onsubmit='return saveConfig(event)'>"
-    "<label>WiFi SSID</label><input type='text' name='wifi_ssid' id='cWifiSsid'>"
+    "<label>WiFi SSID</label>"
+    "<div class='row'>"
+    "<select id='cWifiSelect' style='flex:2'><option value=''>-- scan for networks --</option></select>"
+    "<button type='button' style='flex:1' onclick='scanWifi()'>Scan</button>"
+    "</div>"
+    "<input type='text' name='wifi_ssid' id='cWifiSsid' placeholder='or type manually' style='margin-top:6px'>"
     "<label>WiFi Password</label><input type='password' name='wifi_password' id='cWifiPass'>"
     "<label>LLM API Key</label><input type='password' name='llm_api_key' id='cLlmKey'>"
     "<label>LLM Model</label><input type='text' name='llm_model' id='cLlmModel'>"
@@ -230,7 +240,13 @@ static const char *k_html =
     "document.getElementById('stMotion').textContent=j.motion?'x:'+j.x+' y:'+j.y+' z:'+j.z:'Stopped';"
     "document.getElementById('stGrip').textContent='Grip:'+j.gripper;"
     "document.getElementById('ipLabel').textContent=j.ip||'';"
+    "setAvail('driveCtrls','roverHint',!!j.rover_available);"
+    "setAvail('visionCtrls','visionHint',!!j.vision_available);"
     "}catch(e){}}"
+    "function setAvail(ctrlsId,hintId,ok){"
+    "const c=document.getElementById(ctrlsId),h=document.getElementById(hintId);"
+    "c.style.opacity=ok?'1':'.4';c.style.pointerEvents=ok?'auto':'none';"
+    "h.style.display=ok?'none':'block';}"
     /* vision */
     "async function vscan(c){const o=document.getElementById('vOut');o.textContent='scanning...';"
     "try{o.textContent=JSON.stringify(await(await fetch('/vision?cmd='+c)).json(),null,2);}catch(e){o.textContent=''+e;}}"
@@ -255,6 +271,18 @@ static const char *k_html =
     "document.getElementById('chatInfo').textContent='done';document.getElementById('chatOut').textContent=t;}"
     "catch(e){document.getElementById('chatInfo').textContent='poll error';}}"
     /* settings */
+    "async function scanWifi(){const sel=document.getElementById('cWifiSelect');"
+    "sel.innerHTML='<option value=\"\">scanning...</option>';"
+    "try{const j=await(await fetch('/wifi_scan')).json();"
+    "if(!j.ok)throw new Error(j.error||'scan failed');"
+    "const nets=(j.networks||[]).sort(function(a,b){return b.rssi-a.rssi;});"
+    "let html='<option value=\"\">-- select network --</option>';"
+    "for(let i=0;i<nets.length;i++){const n=nets[i];"
+    "html+='<option value=\"'+n.ssid+'\">'+n.ssid+' ('+n.rssi+'dBm'+(n.auth==='open'?', open':'')+')</option>';}"
+    "sel.innerHTML=html;"
+    "}catch(e){sel.innerHTML='<option value=\"\">scan failed: '+e.message+'</option>';}}"
+    "document.getElementById('cWifiSelect').addEventListener('change',function(){"
+    "if(this.value)document.getElementById('cWifiSsid').value=this.value;});"
     "async function loadConfig(){try{const j=await(await fetch('/config')).json();"
     "document.getElementById('cWifiSsid').value=j.wifi_ssid||'';"
     "document.getElementById('cWifiPass').value=j.wifi_password||'';"
@@ -296,11 +324,19 @@ static esp_err_t h_status(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
     const char *ip = rover_s3_wifi_get_ip();
-    char buf[256];
+    /* rover_move/unitv_scan are no longer registered locally; the drive/vision
+     * panels stay in the UI but go inactive until an MCP-provided capability
+     * registers the same tool ids under claw_cap. */
+    bool rover_available = claw_cap_find("rover_move") != NULL;
+    bool vision_available = claw_cap_find("unitv_scan") != NULL;
+    char buf[320];
     int n = snprintf(buf, sizeof(buf),
                      "{\"state\":\"IDLE\",\"motion\":0,\"x\":0,\"y\":0,\"z\":0,"
-                     "\"gripper\":\"unknown\",\"ip\":\"%s\"}",
-                     ip ? ip : "");
+                     "\"gripper\":\"unknown\",\"ip\":\"%s\","
+                     "\"rover_available\":%s,\"vision_available\":%s}",
+                     ip ? ip : "",
+                     rover_available ? "true" : "false",
+                     vision_available ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, buf, n);
 }
@@ -458,6 +494,104 @@ static esp_err_t h_chat_result(httpd_req_t *req)
     return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
 }
 
+static const char *wifi_authmode_name(wifi_auth_mode_t authmode)
+{
+    switch (authmode) {
+    case WIFI_AUTH_OPEN:         return "open";
+    case WIFI_AUTH_WEP:          return "wep";
+    case WIFI_AUTH_WPA_PSK:      return "wpa_psk";
+    case WIFI_AUTH_WPA2_PSK:     return "wpa2_psk";
+    case WIFI_AUTH_WPA_WPA2_PSK: return "wpa_wpa2_psk";
+#if CONFIG_ESP_WIFI_ENABLE_WPA3_SAE
+    case WIFI_AUTH_WPA3_PSK:      return "wpa3_psk";
+    case WIFI_AUTH_WPA2_WPA3_PSK: return "wpa2_wpa3_psk";
+#endif
+    default: return "unknown";
+    }
+}
+
+/* Scan for nearby WiFi networks so the settings page can offer a picker
+ * instead of a blind SSID text field. Scanning requires STA (or APSTA); the
+ * captive-portal setup flow runs AP-only, so switch to APSTA first — the AP
+ * keeps serving the portal while the STA radio scans. */
+static esp_err_t h_wifi_scan(httpd_req_t *req)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) == ESP_OK && mode == WIFI_MODE_AP) {
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+    }
+
+    wifi_scan_config_t scan_cfg = {0};
+    scan_cfg.show_hidden = true;
+    scan_cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    scan_cfg.scan_time.active.min = 40;
+    scan_cfg.scan_time.active.max = 120;
+
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);
+    if (err != ESP_OK) {
+        char body[96];
+        snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", esp_err_to_name(err));
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+    }
+
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    wifi_ap_record_t *records = NULL;
+    if (ap_count > 0) {
+        records = calloc(ap_count, sizeof(wifi_ap_record_t));
+        if (!records) {
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            return httpd_resp_send(req, "{\"ok\":false,\"error\":\"oom\"}", HTTPD_RESP_USE_STRLEN);
+        }
+        uint16_t count = ap_count;
+        if (esp_wifi_scan_get_ap_records(&count, records) != ESP_OK) {
+            free(records);
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            return httpd_resp_send(req, "{\"ok\":false,\"error\":\"scan read failed\"}", HTTPD_RESP_USE_STRLEN);
+        }
+        ap_count = count;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON *networks = cJSON_CreateArray();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddItemToObject(root, "networks", networks);
+
+    /* Dedup by SSID, keeping the strongest signal (an AP is often seen on
+     * multiple channels/BSSIDs). */
+    for (uint16_t i = 0; i < ap_count; i++) {
+        wifi_ap_record_t *best = &records[i];
+        if (best->ssid[0] == '\0') continue;
+        for (uint16_t j = (uint16_t)(i + 1); j < ap_count; j++) {
+            wifi_ap_record_t *cand = &records[j];
+            if (cand->ssid[0] == '\0') continue;
+            if (strcmp((const char *)best->ssid, (const char *)cand->ssid) == 0) {
+                if (cand->rssi > best->rssi) *best = *cand;
+                cand->ssid[0] = '\0';
+            }
+        }
+        if (best->ssid[0] == '\0') continue;
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "ssid", (const char *)best->ssid);
+        cJSON_AddNumberToObject(item, "rssi", best->rssi);
+        cJSON_AddStringToObject(item, "auth", wifi_authmode_name(best->authmode));
+        cJSON_AddItemToArray(networks, item);
+    }
+    free(records);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return httpd_resp_send_500(req);
+    }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t send_err = httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    free(json);
+    return send_err;
+}
+
 static esp_err_t h_config_get(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
@@ -474,6 +608,8 @@ static esp_err_t h_config_get(httpd_req_t *req)
     cJSON_AddStringToObject(j, "tg_bot_token",  s->tg_bot_token);
     cJSON_AddStringToObject(j, "time_timezone", s->time_timezone);
     cJSON_AddStringToObject(j, "tts_voice",     s->tts_voice);
+    cJSON_AddStringToObject(j, "tts_model",     s->tts_model);
+    cJSON_AddStringToObject(j, "whisper_model", s->whisper_model);
     cJSON_AddStringToObject(j, "voice_enabled", s->voice_enabled);
 
     char *out = cJSON_PrintUnformatted(j);
@@ -574,6 +710,8 @@ static esp_err_t h_config_post(httpd_req_t *req)
             SET_J("tg_bot_token",    tg_bot_token);
             SET_J("time_timezone",   time_timezone);
             SET_J("tts_voice",       tts_voice);
+            SET_J("tts_model",       tts_model);
+            SET_J("whisper_model",   whisper_model);
             SET_J("voice_enabled",   voice_enabled);
 #undef SET_J
             cJSON_Delete(j);
@@ -597,6 +735,8 @@ static esp_err_t h_config_post(httpd_req_t *req)
         SET_FORM("tg_bot_token",    tg_bot_token);
         SET_FORM("time_timezone",   time_timezone);
         SET_FORM("tts_voice",       tts_voice);
+        SET_FORM("tts_model",       tts_model);
+        SET_FORM("whisper_model",   whisper_model);
         SET_FORM("voice_enabled",   voice_enabled);
 #undef SET_FORM
     }
@@ -676,6 +816,7 @@ esp_err_t rover_s3_httpd_start(void)
         { .uri = "/chat_result", .method = HTTP_GET,  .handler = h_chat_result},
         { .uri = "/config",      .method = HTTP_GET,  .handler = h_config     },
         { .uri = "/config",      .method = HTTP_POST, .handler = h_config     },
+        { .uri = "/wifi_scan",   .method = HTTP_GET,  .handler = h_wifi_scan  },
     };
     /* Wildcard handler: redirect all unknown URLs to / for captive portal */
     static const httpd_uri_t catchall = {

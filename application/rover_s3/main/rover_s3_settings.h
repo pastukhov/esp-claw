@@ -24,9 +24,11 @@ typedef struct {
     char time_timezone[ROVER_S3_TZ_LEN];
     char whisper_api_key[ROVER_S3_STR_LEN];  /* empty = use llm_api_key */
     char whisper_base_url[ROVER_S3_STR_LEN]; /* empty = use llm_base_url */
+    char whisper_model[64];                  /* default whisper-1 */
     char tts_api_key[ROVER_S3_STR_LEN];      /* empty = use llm_api_key */
     char tts_base_url[ROVER_S3_STR_LEN];     /* empty = use llm_base_url */
     char tts_voice[32];                      /* default alloy */
+    char tts_model[64];                      /* default tts-1 */
     char wake_sensitivity[8];                /* float string, default 0.7 */
     char multinet_threshold[8];              /* float string, default 0.85 */
     char voice_enabled[8];                   /* 1 or 0, default 1 */

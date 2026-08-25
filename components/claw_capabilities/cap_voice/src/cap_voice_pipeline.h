@@ -25,6 +25,7 @@ typedef struct {
     float multinet_threshold;
     const char *whisper_api_key;
     const char *whisper_base_url;
+    const char *whisper_model;
     const char *tts_api_key;
     const char *tts_base_url;
 } cap_voice_pipeline_config_t;

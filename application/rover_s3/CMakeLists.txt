@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_SOURCE_DIR}/../../components/claw_modules"
-    # Only include the specific capabilities rover_s3 actually uses
-    "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_rover"
-    "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_unitv"
+    # Only include the specific capabilities rover_s3 actually uses.
+    # Rover movement/gripper (cap_rover) and camera (cap_unitv) are not
+    # included here: that hardware is now driven through an external MCP
+    # server instead of this firmware's own I2C/UART drivers.
     "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_voice"
     # cap_im_platform/cap_files/cap_skill_mgr/cap_session_mgr/cap_system are
     # not used directly by rover_s3's own sources; app_claw's own manifest
