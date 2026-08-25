@@ -74,6 +74,17 @@ void app_main(void)
          * service type, not _http._tcp) picks up /metrics automatically. */
         mdns_service_add(NULL, "_prometheus-http", "_tcp", s_cfg.mcp_port,
                          NULL, 0);
+        /* Also advertise as _mcp._tcp (with an "endpoint" TXT key) so
+         * generic MCP clients that browse for that service type -- e.g.
+         * this repo's own cap_mcp_client/mcp_mdns component, which queries
+         * _mcp._tcp specifically and expects "endpoint" in the TXT record --
+         * can auto-discover this rover over mcp_discover instead of needing
+         * a hardcoded server_url. */
+        mdns_txt_item_t mcp_txt[] = {
+            { "endpoint", "mcp" }, /* matches wave_rover_mcp.c's private MCP_ENDPOINT */
+        };
+        mdns_service_add(NULL, "_mcp", "_tcp", s_cfg.mcp_port, mcp_txt,
+                         sizeof(mcp_txt) / sizeof(mcp_txt[0]));
         ESP_LOGI(TAG, "mDNS: %s.local -> :%u", s_cfg.hostname, s_cfg.mcp_port);
     } else {
         ESP_LOGW(TAG, "mDNS init failed: %s", esp_err_to_name(mdns_err));
